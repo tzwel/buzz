@@ -5,15 +5,20 @@ const _vm = @import("./vm.zig");
 const VM = _vm.VM;
 const Value = _value.Value;
 
-pub const OpCode = enum(u8) {
+pub const Instruction = u32;
+pub const Arg = u17;
+pub const FullArg = u25;
+pub const Reg = u8;
+pub const Code = u7;
+
+pub const OpCode = enum(Code) {
     OP_CONSTANT,
     OP_NULL,
     OP_VOID,
     OP_TRUE,
     OP_FALSE,
     OP_POP,
-    OP_COPY,
-    OP_CLONE,
+    OP_PUSH,
 
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,
@@ -52,7 +57,6 @@ pub const OpCode = enum(u8) {
     OP_NOT,
     OP_NEGATE,
 
-    OP_SWAP,
     OP_JUMP,
     OP_JUMP_IF_FALSE,
     OP_JUMP_IF_NOT_NULL,
@@ -110,7 +114,7 @@ pub const OpCode = enum(u8) {
     OP_LIST_APPEND,
 
     OP_MAP,
-    // FIXMEL delete and only use OP_SET_MAP_SUBSCRIPT
+    // FIXME: delete and only use OP_SET_MAP_SUBSCRIPT
     OP_SET_MAP,
 
     OP_EXPORT,
@@ -123,10 +127,10 @@ pub const OpCode = enum(u8) {
 pub const Chunk = struct {
     const Self = @This();
 
-    pub const max_constants: u24 = 16777215;
+    pub const max_constants: Arg = std.math.maxInt(Arg);
 
     /// List of opcodes to execute
-    code: std.ArrayList(u32),
+    code: std.ArrayList(Instruction),
     /// List of lines
     lines: std.ArrayList(usize),
     /// List of constants defined in this chunk
@@ -134,7 +138,7 @@ pub const Chunk = struct {
 
     pub fn init(allocator: Allocator) Self {
         return Self{
-            .code = std.ArrayList(u32).init(allocator),
+            .code = std.ArrayList(Instruction).init(allocator),
             .constants = std.ArrayList(Value).init(allocator),
             .lines = std.ArrayList(usize).init(allocator),
         };
@@ -146,16 +150,16 @@ pub const Chunk = struct {
         self.lines.deinit();
     }
 
-    pub fn write(self: *Self, code: u32, line: usize) !void {
+    pub fn write(self: *Self, code: Instruction, line: usize) !void {
         _ = try self.code.append(code);
         _ = try self.lines.append(line);
     }
 
-    pub fn addConstant(self: *Self, vm: ?*VM, value: Value) !u24 {
+    pub fn addConstant(self: *Self, vm: ?*VM, value: Value) !Arg {
         if (vm) |uvm| uvm.push(value);
         try self.constants.append(value);
         if (vm) |uvm| _ = uvm.pop();
 
-        return @intCast(u24, self.constants.items.len - 1);
+        return @intCast(Arg, self.constants.items.len - 1);
     }
 };

@@ -157,16 +157,9 @@ pub const ParseNode = struct {
         if (self.patch_opt_jumps) {
             assert(codegen.opt_jumps != null);
 
-            // Hope over OP_POP if actual value
-            const njump: usize = try codegen.emitJump(self.location, .OP_JUMP);
-
             for (codegen.opt_jumps.?.items) |jump| {
                 try codegen.patchJump(jump);
             }
-            // If aborted by a null optional, will result in null on the stack
-            try codegen.emitOpCode(self.location, .OP_POP);
-
-            try codegen.patchJump(njump);
 
             codegen.opt_jumps.?.deinit();
             codegen.opt_jumps = null;
@@ -264,7 +257,8 @@ pub const ExpressionNode = struct {
 
         _ = try self.expression.toByteCode(self.expression, codegen, breaks);
 
-        try codegen.emitOpCode(node.location, .OP_POP);
+        // Pop register holding the expression since its result is discarded
+        _ = try codegen.popRegister();
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -472,9 +466,19 @@ pub const NamedVariableNode = struct {
 
             _ = try value.toByteCode(value, codegen, breaks);
 
-            try codegen.emitCodeArg(self.node.location, set_op, @intCast(u24, self.slot));
+            try codegen.emitCodeArgReg(
+                self.node.location,
+                set_op,
+                @intCast(u24, self.slot),
+                codegen.popRegister(), // Here, register holds the value to set
+            );
         } else {
-            try codegen.emitCodeArg(self.node.location, get_op, @intCast(u24, self.slot));
+            try codegen.emitCodeArgReg(
+                self.node.location,
+                get_op,
+                @intCast(u24, self.slot),
+                codegen.pushRegister(),
+            );
         }
 
         try node.patchOptJumps(codegen);
@@ -569,7 +573,10 @@ pub const IntegerNode = struct {
 
         var self = Self.cast(node).?;
 
-        try codegen.emitConstant(self.node.location, Value.fromInteger(self.integer_constant));
+        try codegen.emitConstant(
+            self.node.location,
+            Value.fromInteger(self.integer_constant),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -646,7 +653,10 @@ pub const FloatNode = struct {
 
         var self = Self.cast(node).?;
 
-        try codegen.emitConstant(self.node.location, Value.fromFloat(self.float_constant));
+        try codegen.emitConstant(
+            self.node.location,
+            Value.fromFloat(self.float_constant),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -721,7 +731,11 @@ pub const BooleanNode = struct {
 
         var self = Self.cast(node).?;
 
-        try codegen.emitOpCode(self.node.location, if (self.constant) .OP_TRUE else .OP_FALSE);
+        if (self.constant) {
+            try codegen.OP_TRUE(self.node.location, codegen.pushRegister());
+        } else {
+            try codegen.OP_FALSE(self.node.location, codegen.pushRegister());
+        }
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -798,7 +812,10 @@ pub const StringLiteralNode = struct {
 
         var self = Self.cast(node).?;
 
-        try codegen.emitConstant(self.node.location, self.constant.toValue());
+        try codegen.emitConstant(
+            self.node.location,
+            self.constant.toValue(),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -879,7 +896,10 @@ pub const PatternNode = struct {
 
         var self = Self.cast(node).?;
 
-        try codegen.emitConstant(self.node.location, self.constant.toValue());
+        try codegen.emitConstant(
+            self.node.location,
+            self.constant.toValue(),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -983,7 +1003,11 @@ pub const StringNode = struct {
 
         if (self.elements.len == 0) {
             // Push the empty string which is always the constant 0
-            try codegen.emitCodeArg(self.node.location, .OP_CONSTANT, 0);
+            try codegen.OP_CONSTANT(
+                self.node.location,
+                0,
+                codegen.pushRegister(),
+            );
 
             try node.endScope(codegen);
 
@@ -998,12 +1022,25 @@ pub const StringNode = struct {
             }
 
             _ = try element.toByteCode(element, codegen, breaks);
+
             if (element.type_def.?.def_type != .String or element.type_def.?.optional) {
-                try codegen.emitOpCode(self.node.location, .OP_TO_STRING);
+                try codegen.OP_TO_STRING(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             }
 
             if (index >= 1) {
-                try codegen.emitOpCode(self.node.location, .OP_ADD_STRING);
+                const reg2 = codegen.popRegister();
+                const reg1 = codegen.popRegister();
+
+                try codegen.OP_ADD_STRING(
+                    self.node.location,
+                    reg1,
+                    reg2,
+                    codegen.pushRegister(),
+                );
             }
         }
 
@@ -1115,7 +1152,7 @@ pub const NullNode = struct {
             return null;
         }
 
-        try codegen.emitOpCode(node.location, .OP_NULL);
+        try codegen.OP_NULL(node.location, codegen.pushRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1179,7 +1216,7 @@ pub const VoidNode = struct {
             return null;
         }
 
-        try codegen.emitOpCode(node.location, .OP_VOID);
+        try codegen.OP_VOID(node.location, codegen.pushRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1274,7 +1311,14 @@ pub const ListNode = struct {
         var self = Self.cast(node).?;
 
         const item_type = self.node.type_def.?.resolved_type.?.List.item_type;
-        const list_offset: usize = try codegen.emitList(self.node.location);
+        const list_register = codegen.pushRegister();
+        try codegen.OP_LIST(
+            self.node.location,
+            try codegen.makeConstant(Value.fromObj(node.type_def.?.toObj())),
+            list_register,
+        );
+
+        // TODO: push on stack the list so it's not collected while adding elements to it
 
         for (self.items) |item| {
             if (item.type_def.?.def_type == .Placeholder) {
@@ -1287,14 +1331,18 @@ pub const ListNode = struct {
                     item.location,
                 );
             } else {
+                // Will put item in a register
                 _ = try item.toByteCode(item, codegen, breaks);
 
-                try codegen.emitOpCode(item.location, .OP_LIST_APPEND);
+                try codegen.OP_LIST_APPEND(
+                    item.location,
+                    codegen.popRegister(),
+                    list_register,
+                );
             }
         }
 
-        const list_type_constant: u24 = try codegen.makeConstant(Value.fromObj(node.type_def.?.toObj()));
-        try codegen.patchList(list_offset, list_type_constant);
+        // Don't pop list register because we don't know if the list will be used
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1449,8 +1497,12 @@ pub const MapNode = struct {
 
         const key_type = self.node.type_def.?.resolved_type.?.Map.key_type;
         const value_type = self.node.type_def.?.resolved_type.?.Map.value_type;
-
-        const map_offset: usize = try codegen.emitMap(self.node.location);
+        const map_register = codegen.pushRegister();
+        try codegen.OP_MAP(
+            self.node.location,
+            try codegen.makeConstant(Value.fromObj(node.type_def.?.toObj())),
+            map_register,
+        );
 
         assert(self.keys.len == self.values.len);
 
@@ -1460,7 +1512,15 @@ pub const MapNode = struct {
             _ = try key.toByteCode(key, codegen, breaks);
             _ = try value.toByteCode(value, codegen, breaks);
 
-            try codegen.emitOpCode(self.node.location, .OP_SET_MAP);
+            const value_reg = codegen.popRegister();
+            const key_reg = codegen.popRegister();
+
+            try codegen.OP_SET_MAP(
+                self.node.location,
+                key_reg,
+                value_reg,
+                map_register,
+            );
 
             if (key.type_def.?.def_type == .Placeholder) {
                 try codegen.reportPlaceholder(key.type_def.?.resolved_type.?.Placeholder);
@@ -1478,9 +1538,6 @@ pub const MapNode = struct {
                 try codegen.reportTypeCheckAt(value_type, value.type_def.?, "Bad value type", value.location);
             }
         }
-
-        const map_type_constant: u24 = try codegen.makeConstant(Value.fromObj(node.type_def.?.toObj()));
-        try codegen.patchMap(map_offset, map_type_constant);
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1627,20 +1684,34 @@ pub const UnwrapNode = struct {
         }
 
         _ = try self.unwrapped.toByteCode(self.unwrapped, codegen, breaks);
+        try codegen.OP_NULL(self.node.location, codegen.pushRegister());
 
-        try codegen.emitOpCode(self.node.location, .OP_COPY);
-        try codegen.emitOpCode(self.node.location, .OP_NULL);
-        try codegen.emitOpCode(self.node.location, .OP_EQUAL);
-        try codegen.emitOpCode(self.node.location, .OP_NOT);
+        const null_register = codegen.popRegister();
+        // That register is the result of the expression so we don't pop it
+        const unwrapped_register = codegen.peekRegister(0);
 
-        const jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
+        try codegen.OP_EQUAL(
+            self.node.location,
+            unwrapped_register,
+            null_register,
+            codegen.pushRegister(),
+        );
+        try codegen.OP_NOT(
+            self.node.location,
+            codegen.popRegister(),
+            codegen.pushRegister(),
+        );
+
+        const jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         if (codegen.opt_jumps == null) {
             codegen.opt_jumps = std.ArrayList(usize).init(codegen.gc.allocator);
         }
         try codegen.opt_jumps.?.append(jump);
-
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop test result
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1744,7 +1815,10 @@ pub const ForceUnwrapNode = struct {
 
         _ = try self.unwrapped.toByteCode(self.unwrapped, codegen, breaks);
 
-        try codegen.emitOpCode(self.node.location, .OP_UNWRAP);
+        try codegen.OP_UNWRAP(
+            self.node.location,
+            codegen.popRegister(),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1838,11 +1912,19 @@ pub const IsNode = struct {
             try codegen.reportPlaceholder(ObjTypeDef.cast(self.constant.obj()).?.resolved_type.?.Placeholder);
         }
 
+        try codegen.OP_CONSTANT(
+            self.node.location,
+            try codegen.makeConstant(self.constant),
+            codegen.pushRegister(),
+        );
         _ = try self.left.toByteCode(self.left, codegen, breaks);
 
-        try codegen.emitCodeArg(self.node.location, .OP_CONSTANT, try codegen.makeConstant(self.constant));
-
-        try codegen.emitOpCode(self.node.location, .OP_IS);
+        try codegen.OP_IS(
+            self.node.location,
+            codegen.popRegister(),
+            codegen.popRegister(),
+            codegen.pushRegister(),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1965,7 +2047,11 @@ pub const UnaryNode = struct {
                     );
                 }
 
-                try codegen.emitOpCode(self.node.location, .OP_BNOT);
+                try codegen.OP_BNOT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Bang => {
                 if (left_type.def_type != .Bool) {
@@ -1976,7 +2062,11 @@ pub const UnaryNode = struct {
                     );
                 }
 
-                try codegen.emitOpCode(self.node.location, .OP_NOT);
+                try codegen.OP_NOT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Minus => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
@@ -1987,7 +2077,11 @@ pub const UnaryNode = struct {
                     );
                 }
 
-                try codegen.emitOpCode(self.node.location, .OP_NEGATE);
+                try codegen.OP_NEGATE(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             else => unreachable,
         }
@@ -2360,8 +2454,7 @@ pub const BinaryNode = struct {
 
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
 
-                const end_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_NOT_NULL);
-                try codegen.emitOpCode(self.node.location, .OP_POP);
+                const end_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_NOT_NULL, codegen.popRegister());
 
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
 
@@ -2373,9 +2466,14 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_BAND);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_BAND(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Bor => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
@@ -2383,9 +2481,14 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_BOR);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_BOR(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Xor => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
@@ -2393,9 +2496,14 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_XOR);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_XOR(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .ShiftLeft => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
@@ -2403,9 +2511,14 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_SHL);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_SHL(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .ShiftRight => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
@@ -2413,9 +2526,14 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_SHR);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_SHR(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Greater => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
@@ -2423,49 +2541,91 @@ pub const BinaryNode = struct {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_GREATER);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_GREATER(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Less => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_LESS);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_LESS(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .GreaterEqual => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_LESS);
-                try codegen.emitOpCode(self.node.location, .OP_NOT);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_LESS(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
+                try codegen.OP_NOT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .LessEqual => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_GREATER);
-                try codegen.emitOpCode(self.node.location, .OP_NOT);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_GREATER(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
+                try codegen.OP_NOT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .BangEqual => {
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_EQUAL);
-                try codegen.emitOpCode(self.node.location, .OP_NOT);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_EQUAL(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
+                try codegen.OP_NOT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .EqualEqual => {
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_EQUAL);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_EQUAL(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Plus => {
                 // zig fmt: off
@@ -2478,50 +2638,76 @@ pub const BinaryNode = struct {
                 }
                 // zig fmt: on
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, switch (left_type.def_type) {
-                    .String => .OP_ADD_STRING,
-                    .List => .OP_ADD_LIST,
-                    .Map => .OP_ADD_MAP,
-                    else => .OP_ADD,
-                });
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.emitCodeRegs(
+                    self.node.location,
+                    switch (left_type.def_type) {
+                        .String => .OP_ADD_STRING,
+                        .List => .OP_ADD_LIST,
+                        .Map => .OP_ADD_MAP,
+                        else => .OP_ADD,
+                    },
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Minus => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_SUBTRACT);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_SUBTRACT(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Star => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_MULTIPLY);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_MULTIPLY(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Slash => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_DIVIDE);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_DIVIDE(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .Percent => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
                     try codegen.reportErrorAt(self.left.location, "Expected `int` or `float`.");
                 }
 
-                _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-                try codegen.emitOpCode(self.node.location, .OP_MOD);
+                _ = try self.left.toByteCode(self.left, codegen, breaks);
+                try codegen.OP_MOD(
+                    self.node.location,
+                    codegen.popRegister(),
+                    codegen.popRegister(),
+                    codegen.pushRegister(),
+                );
             },
             .And => {
                 if (left_type.def_type != .Bool) {
@@ -2530,8 +2716,11 @@ pub const BinaryNode = struct {
 
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
 
-                const end_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-                try codegen.emitOpCode(self.node.location, .OP_POP);
+                const end_jump: usize = try codegen.emitJump(
+                    self.node.location,
+                    .OP_JUMP_IF_FALSE,
+                    codegen.popRegister(),
+                );
 
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
 
@@ -2544,12 +2733,11 @@ pub const BinaryNode = struct {
 
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
 
-                const else_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-                const end_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP);
-
-                try codegen.patchJump(else_jump);
-                try codegen.emitOpCode(self.node.location, .OP_POP);
-
+                const end_jump: usize = try codegen.emitJump(
+                    self.node.location,
+                    .OP_JUMP_IF_FALSE,
+                    codegen.popRegister(),
+                );
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
 
                 try codegen.patchJump(end_jump);
@@ -2774,9 +2962,29 @@ pub const SubscriptNode = struct {
         if (self.value) |value| {
             _ = try value.toByteCode(value, codegen, breaks);
 
-            try codegen.emitOpCode(self.node.location, set_code);
+            const value_reg = codegen.peekRegister(2);
+            const key_reg = codegen.peekRegister(1);
+            const subscript_reg = codegen.peekRegister(0);
+            try codegen.emitCodeRegs(
+                self.node.location,
+                set_code,
+                key_reg,
+                value_reg,
+                subscript_reg,
+            );
+            codegen.popRegister();
+            codegen.popRegister();
+            // Popping all register expect for the value_reg which is the result of `subscript[key] = value`
         } else {
-            try codegen.emitOpCode(self.node.location, get_code);
+            const key_reg = codegen.popRegister();
+            const subscript_reg = codegen.popRegister();
+            try codegen.emitCodeRegs(
+                self.node.location,
+                get_code,
+                subscript_reg,
+                key_reg,
+                codegen.pushRegister(),
+            );
         }
 
         try node.patchOptJumps(codegen);
@@ -2894,37 +3102,44 @@ pub const TryNode = struct {
         for (self.clauses.keys()) |error_type| {
             const clause = self.clauses.get(error_type).?;
 
-            // We assume the error is on top of the stack
-            try codegen.emitOpCode(clause.location, .OP_COPY); // Copy error value since its argument to the catch clause
+            // We assume the error is in last register
             try codegen.emitConstant(clause.location, error_type.toValue());
-            try codegen.emitOpCode(clause.location, .OP_IS);
+            const type_register = codegen.popRegister();
+            const error_register = codegen.popRegister();
+            try codegen.OP_IS(
+                clause.location,
+                error_register,
+                type_register,
+                codegen.pushRegister(),
+            );
             // If error type does not match, jump to next catch clause
-            const next_clause_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-            // Pop `is` result
-            try codegen.emitOpCode(clause.location, .OP_POP);
+            const next_clause_jump: usize = try codegen.emitJump(
+                self.node.location,
+                .OP_JUMP_IF_FALSE,
+                codegen.popRegister(),
+            );
 
-            // Clause block will pop error value since its declared as a local in it
-            // We don't catch things is the catch clause
+            // We don't catch things in the catch clause
             const previous = codegen.current.?.try_should_handle;
             codegen.current.?.try_should_handle = null;
+
             _ = try clause.toByteCode(clause, codegen, breaks);
+
             codegen.current.?.try_should_handle = previous;
 
             // After handling the error, jump over next clauses
             try exit_jumps.append(try codegen.emitJump(self.node.location, .OP_JUMP));
 
             try codegen.patchJump(next_clause_jump);
-            // Pop `is` result
-            try codegen.emitOpCode(clause.location, .OP_POP);
         }
 
         if (self.unconditional_clause) |unconditional_clause| {
-            // pop error because its not a local of this clause
-            try codegen.emitOpCode(unconditional_clause.location, .OP_POP);
             // We don't catch things is the catch clause
             const previous = codegen.current.?.try_should_handle;
             codegen.current.?.try_should_handle = null;
+
             _ = try unconditional_clause.toByteCode(unconditional_clause, codegen, breaks);
+
             codegen.current.?.try_should_handle = previous;
 
             try exit_jumps.append(try codegen.emitJump(self.node.location, .OP_JUMP));
@@ -3163,15 +3378,28 @@ pub const FunctionNode = struct {
                 // Then put any exported globals on the stack
                 if (!codegen.testing and function_type == .ScriptEntryPoint) {
                     if (self.main_slot) |main_slot| {
-                        try codegen.emitCodeArg(node.location, .OP_GET_GLOBAL, @intCast(u24, main_slot));
-                        try codegen.emitCodeArg(node.location, .OP_GET_LOCAL, 0); // cli args are always local 0
-                        try codegen.emitCodeArgs(node.location, .OP_CALL, 1, 0);
+                        try codegen.OP_GET_GLOBAL(node.location, @intCast(u24, main_slot), codegen.pushRegister());
+                        try codegen.OP_PUSH(node.location, codegen.popRegister());
+                        try codegen.OP_GET_LOCAL(node.location, 0, codegen.pushRegister()); // cli args are always local 0
+                        try codegen.OP_PUSH(node.location, codegen.popRegister());
+                        try codegen.OP_CALL(
+                            node.location,
+                            1,
+                            0,
+                            codegen.pushRegister(),
+                        );
                     }
                 } else if (codegen.testing and self.test_slots != null) {
                     // Create an entry point wich runs all `test`
                     for (self.test_slots.?) |slot| {
-                        try codegen.emitCodeArg(node.location, .OP_GET_GLOBAL, @intCast(u24, slot));
-                        try codegen.emitCodeArgs(node.location, .OP_CALL, 0, 0);
+                        try codegen.OP_GET_GLOBAL(node.location, @intCast(u24, slot), codegen.pushRegister());
+                        try codegen.OP_PUSH(node.location, codegen.popRegister());
+                        try codegen.OP_CALL(
+                            node.location,
+                            0,
+                            0,
+                            codegen.pushRegister(),
+                        );
                     }
                 }
 
@@ -3183,13 +3411,14 @@ pub const FunctionNode = struct {
 
                     var index: usize = 0;
                     while (index < self.exported_count orelse 0) : (index += 1) {
-                        try codegen.emitCodeArg(node.location, .OP_GET_GLOBAL, @intCast(u24, index));
+                        try codegen.OP_GET_GLOBAL(node.location, @intCast(u24, index), codegen.pushRegister());
+                        try codegen.OP_PUSH(node.location, codegen.popRegister());
                     }
 
-                    try codegen.emitCodeArg(node.location, .OP_EXPORT, @intCast(u24, self.exported_count orelse 0));
+                    try codegen.OP_EXPORT(node.location, @intCast(u24, self.exported_count orelse 0));
                 } else {
-                    try codegen.emitOpCode(node.location, .OP_VOID);
-                    try codegen.emitOpCode(node.location, .OP_RETURN);
+                    try codegen.OP_VOID(node.location, codegen.pushRegister());
+                    try codegen.OP_RETURN(node.location, codegen.popRegister());
                     codegen.current.?.return_emitted = true;
                 }
             } else if (codegen.current.?.function.?.type_def.resolved_type.?.Function.return_type.def_type == .Void and !codegen.current.?.return_emitted) {
@@ -3214,9 +3443,17 @@ pub const FunctionNode = struct {
         if (function_type != .ScriptEntryPoint) {
             // `extern` functions don't have upvalues
             if (function_type == .Extern) {
-                try codegen.emitCodeArg(node.location, .OP_CONSTANT, try codegen.makeConstant(self.native.?.toValue()));
+                try codegen.OP_CONSTANT(
+                    node.location,
+                    try codegen.makeConstant(self.native.?.toValue()),
+                    codegen.pushRegister(),
+                );
             } else {
-                try codegen.emitCodeArg(node.location, .OP_CLOSURE, try codegen.makeConstant(current_function.toValue()));
+                try codegen.OP_CLOSURE(
+                    node.location,
+                    try codegen.makeConstant(current_function.toValue()),
+                    codegen.pushRegister(),
+                );
 
                 var it = self.upvalue_binding.iterator();
                 while (it.next()) |kv| {
@@ -3428,7 +3665,7 @@ pub const YieldNode = struct {
 
         _ = try self.expression.toByteCode(self.expression, codegen, breaks);
 
-        try codegen.emitOpCode(node.location, .OP_YIELD);
+        try codegen.OP_YIELD(node.location, codegen.popRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -3517,7 +3754,7 @@ pub const ResolveNode = struct {
 
         _ = try self.fiber.toByteCode(self.fiber, codegen, breaks);
 
-        try codegen.emitOpCode(node.location, .OP_RESOLVE);
+        try codegen.OP_RESOLVE(node.location, codegen.popRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -3606,7 +3843,7 @@ pub const ResumeNode = struct {
 
         _ = try self.fiber.toByteCode(self.fiber, codegen, breaks);
 
-        try codegen.emitOpCode(node.location, .OP_RESUME);
+        try codegen.OP_RESUME(node.location, codegen.popRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -3735,6 +3972,7 @@ pub const AsyncCallNode = struct {
     }
 };
 
+// TODO: split Call and Invoke nodes because the two together is to confusing
 pub const CallNode = struct {
     const Self = @This();
 
@@ -3804,7 +4042,14 @@ pub const CallNode = struct {
 
             _ = try self.callee.toByteCode(self.callee, codegen, breaks);
             _ = try value.toByteCode(value, codegen, breaks);
-            try codegen.emitOpCode(value.location, .OP_GET_ENUM_CASE_FROM_VALUE);
+            const value_reg = codegen.popRegister();
+            const enum_reg = codegen.popRegister();
+            try codegen.OP_GET_ENUM_CASE_FROM_VALUE(
+                value.location,
+                enum_reg,
+                value_reg,
+                codegen.pushRegister(),
+            );
 
             return null;
         }
@@ -3827,6 +4072,7 @@ pub const CallNode = struct {
 
         if (!invoked and invoked_on == null) {
             _ = try self.callee.toByteCode(self.callee, codegen, breaks);
+            try codegen.OP_PUSH(self.callee.location, codegen.popRegister());
         }
 
         const callee_type = switch (self.callee.node_type) {
@@ -3882,7 +4128,7 @@ pub const CallNode = struct {
         }
 
         // Arguments
-        const args: std.AutoArrayHashMap(*ObjString, *ObjTypeDef) = function_type.resolved_type.?.Function.parameters;
+        const args = function_type.resolved_type.?.Function.parameters;
         const defaults = function_type.resolved_type.?.Function.defaults;
         const arg_keys = args.keys();
         const arg_count = arg_keys.len;
@@ -3897,17 +4143,14 @@ pub const CallNode = struct {
             try codegen.reportErrorAt(node.location, "Too many arguments.");
         }
 
-        // First push on the stack arguments has they are parsed
-        var needs_reorder = false;
+        // First evaluate argument in order and put them in registers
+        var provided_arguments = std.AutoArrayHashMap(*ObjString, u8).init(codegen.gc.allocator);
+        defer provided_arguments.deinit();
+
         for (self.arguments.keys()) |arg_key, index| {
             const argument = self.arguments.get(arg_key).?;
             const actual_arg_key = if (index == 0 and std.mem.eql(u8, arg_key.string, "$")) arg_keys[0] else arg_key;
             const def_arg_type = args.get(actual_arg_key);
-
-            const ref_index = args.getIndex(actual_arg_key);
-            if (index != ref_index) {
-                needs_reorder = true;
-            }
 
             // Type check the argument
             if (def_arg_type) |arg_type| {
@@ -3928,29 +4171,26 @@ pub const CallNode = struct {
             }
 
             _ = try argument.toByteCode(argument, codegen, breaks);
+
+            try provided_arguments.put(actual_arg_key, codegen.peekRegister(0));
         }
 
-        // Argument order reference
-        var arguments_order_ref = std.ArrayList(*ObjString).init(codegen.gc.allocator);
-        defer arguments_order_ref.deinit();
-        try arguments_order_ref.appendSlice(self.arguments.keys());
-
-        // Push default arguments
-        if (missing_arguments.count() > 0) {
-            var tmp_missing_arguments = try missing_arguments.clone();
-            defer tmp_missing_arguments.deinit();
-            const missing_keys = tmp_missing_arguments.keys();
-            for (missing_keys) |missing_key| {
-                if (defaults.get(missing_key)) |default| {
-                    // TODO: like ObjTypeDef, avoid generating constants multiple time for the same value
-                    try codegen.emitConstant(node.location, default);
-                    try codegen.emitOpCode(node.location, .OP_CLONE);
-
-                    try arguments_order_ref.append(missing_key);
-                    _ = missing_arguments.orderedRemove(missing_key);
-                    needs_reorder = true;
-                }
+        // Push arguments on stack in expected order
+        for (arg_keys) |key| {
+            if (provided_arguments.get(key)) |arg_reg| {
+                try codegen.OP_PUSH(node.location, arg_reg);
+                _ = missing_arguments.orderedRemove(key);
+            } else if (defaults.get(key)) |default| {
+                try codegen.emitConstant(node.location, default);
+                try codegen.OP_PUSH(node.location, codegen.popRegister());
+                _ = missing_arguments.orderedRemove(key);
             }
+        }
+
+        // Pop registers of provider arguments
+        var it = provided_arguments.iterator();
+        while (it.next()) {
+            codegen.popRegister();
         }
 
         if (missing_arguments.count() > 0) {
@@ -3961,38 +4201,6 @@ pub const CallNode = struct {
             }
             defer missing.deinit();
             try codegen.reportErrorFmt(node.location, "Missing argument(s): {s}", .{missing.items});
-        }
-
-        // Reorder arguments
-        if (needs_reorder) {
-            // Until ordered
-            while (true) {
-                var ordered = true;
-
-                for (arguments_order_ref.items) |arg_key, index| {
-                    const actual_arg_key = if (index == 0 and std.mem.eql(u8, arg_key.string, "$")) args.keys()[0] else arg_key;
-                    const correct_index = args.getIndex(actual_arg_key).?;
-
-                    if (correct_index != index) {
-                        ordered = false;
-
-                        // TODO: both OP_SWAP args could fit in a 32 bit instruction
-                        try codegen.emitCodeArg(node.location, .OP_SWAP, @intCast(u24, arg_count - index - 1));
-                        // to where it should be
-                        try codegen.emit(node.location, @intCast(u32, arg_count - correct_index - 1));
-
-                        // Switch it in the reference
-                        var temp = arguments_order_ref.items[index];
-                        arguments_order_ref.items[index] = arguments_order_ref.items[correct_index];
-                        arguments_order_ref.items[correct_index] = temp;
-
-                        // Stop (so we can take the swap into account) and try again
-                        break;
-                    }
-                }
-
-                if (ordered) break;
-            }
         }
 
         // Catch clause
@@ -4016,6 +4224,7 @@ pub const CallNode = struct {
                 }
 
                 _ = try catch_default.toByteCode(catch_default, codegen, breaks);
+                try codegen.OP_PUSH(node.location, codegen.popRegister());
             }
         } else if (error_types) |errors| {
             if (codegen.current.?.enclosing != null and codegen.current.?.function.?.type_def.resolved_type.?.Function.function_type != .Test) {
@@ -4065,11 +4274,11 @@ pub const CallNode = struct {
                         else @intCast(u8, arg_count);
                 // zig fmt: on
 
-                try codegen.emitCodeArgs(
+                try codegen.OP_ROUTINE(
                     self.node.location,
-                    .OP_ROUTINE,
                     call_arg_count,
                     if (self.catch_default != null) 1 else 0,
+                    codegen.pushRegister(),
                 );
 
                 try node.patchOptJumps(codegen);
@@ -4078,9 +4287,8 @@ pub const CallNode = struct {
                 return null;
             } else {
                 if (invoked) {
-                    try codegen.emitCodeArg(
+                    try codegen.OP_INVOKE_ROUTINE(
                         self.node.location,
-                        .OP_INVOKE_ROUTINE,
                         try codegen.identifierConstant(DotNode.cast(self.callee).?.identifier.lexeme),
                     );
                 }
@@ -4101,7 +4309,7 @@ pub const CallNode = struct {
         // Normal call/invoke
         if (invoked) {
             // TODO: can it be invoked without callee being a DotNode?
-            try codegen.emitCodeArg(
+            try codegen.emitCodeArgReg(
                 self.node.location,
                 switch (DotNode.cast(self.callee).?.callee.type_def.?.def_type) {
                     .ObjectInstance, .ProtocolInstance => .OP_INSTANCE_INVOKE,
@@ -4113,15 +4321,16 @@ pub const CallNode = struct {
                     else => unreachable,
                 },
                 try codegen.identifierConstant(DotNode.cast(self.callee).?.identifier.lexeme),
+                codegen.pushRegister(),
             );
         }
 
         if (!invoked) {
-            try codegen.emitCodeArgs(
+            try codegen.OP_CALL(
                 self.node.location,
-                .OP_CALL,
-                @intCast(u8, arguments_order_ref.items.len),
-                if (self.catch_default != null) 1 else 0,
+                @intCast(u8, arg_keys.len),
+                self.catch_default != null,
+                codegen.pushRegister(),
             );
         } else {
             try codegen.emitTwo(
@@ -4320,7 +4529,11 @@ pub const FunDeclarationNode = struct {
         _ = try self.function.node.toByteCode(&self.function.node, codegen, breaks);
 
         if (self.slot_type == .Global) {
-            try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(u24, self.slot));
+            try codegen.OP_DEFINE_GLOBAL(
+                self.node.location,
+                @intCast(u24, self.slot),
+                codegen.popRegister(),
+            );
         }
 
         try node.patchOptJumps(codegen);
@@ -4424,11 +4637,17 @@ pub const VarDeclarationNode = struct {
 
             _ = try value.toByteCode(value, codegen, breaks);
         } else {
-            try codegen.emitOpCode(self.node.location, .OP_NULL);
+            try codegen.OP_NULL(self.node.location, codegen.pushRegister());
         }
 
         if (self.slot_type == .Global) {
-            try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(u24, self.slot));
+            try codegen.OP_DEFINE_GLOBAL(
+                self.node.location,
+                @intCast(u17, self.slot),
+                codegen.popRegister(),
+            );
+        } else {
+            try codegen.OP_PUSH(self.node.location, codegen.popRegister());
         }
 
         try node.patchOptJumps(codegen);
@@ -4565,10 +4784,17 @@ pub const EnumNode = struct {
             },
         }
 
-        try codegen.emitCodeArg(self.node.location, .OP_ENUM, try codegen.makeConstant(node.type_def.?.toValue()));
-        try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(u24, self.slot));
-
-        try codegen.emitCodeArg(self.node.location, .OP_GET_GLOBAL, @intCast(u24, self.slot));
+        try codegen.OP_ENUM(
+            self.node.location,
+            try codegen.makeConstant(node.type_def.?.toValue()),
+            codegen.pushRegister(),
+        );
+        const enum_register = codegen.peekRegister(0);
+        try codegen.OP_DEFINE_GLOBAL(
+            self.node.location,
+            @intCast(u17, self.slot),
+            enum_register,
+        );
 
         for (self.cases.items) |case| {
             if (case.type_def == null or case.type_def.?.def_type == .Placeholder) {
@@ -4583,11 +4809,17 @@ pub const EnumNode = struct {
             }
 
             _ = try case.toByteCode(case, codegen, breaks);
+            const value_register = codegen.popRegister();
 
-            try codegen.emitOpCode(self.node.location, .OP_ENUM_CASE);
+            try codegen.OP_ENUM_CASE(
+                self.node.location,
+                enum_register,
+                value_register,
+            );
         }
 
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        // Pop enum register
+        codegen.popRegister();
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -4739,7 +4971,10 @@ pub const ThrowNode = struct {
 
         _ = try self.error_value.toByteCode(self.error_value, codegen, breaks);
 
-        try codegen.emitOpCode(self.node.location, .OP_THROW);
+        try codegen.OP_THROW(
+            self.node.location,
+            codegen.popRegister(),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -5002,15 +5237,17 @@ pub const InlineIfNode = struct {
         // Generate the if/else
         _ = try self.condition.toByteCode(self.condition, codegen, breaks);
 
-        const then_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        const then_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         _ = try self.body.toByteCode(self.body, codegen, breaks);
 
         const else_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP);
 
         try codegen.patchJump(then_jump);
-        try codegen.emitOpCode(self.node.location, .OP_POP);
 
         _ = try self.else_branch.toByteCode(self.else_branch, codegen, breaks);
         try codegen.patchJump(else_jump);
@@ -5137,29 +5374,44 @@ pub const IfNode = struct {
 
         _ = try self.condition.toByteCode(self.condition, codegen, breaks);
         if (self.unwrapped_identifier != null) {
-            try codegen.emitOpCode(self.condition.location, .OP_COPY);
-            try codegen.emitOpCode(self.condition.location, .OP_NULL);
-            try codegen.emitOpCode(self.condition.location, .OP_EQUAL);
-            try codegen.emitOpCode(self.condition.location, .OP_NOT);
+            try codegen.OP_NULL(
+                self.condition.location,
+                codegen.pushRegister(),
+            );
+            try codegen.OP_EQUAL(
+                self.condition.location,
+                codegen.popRegister(),
+                codegen.popRegister(),
+                codegen.pushRegister(),
+            );
+            try codegen.OP_NOT(
+                self.condition.location,
+                codegen.popRegister(),
+                codegen.pushRegister(),
+            );
         } else if (self.casted_type) |casted_type| {
-            try codegen.emitOpCode(self.condition.location, .OP_COPY);
             try codegen.emitConstant(self.condition.location, casted_type.toValue());
-            try codegen.emitOpCode(self.condition.location, .OP_IS);
+            const constant_register = codegen.popRegister();
+            const cond_register = codegen.popRegister();
+            try codegen.OP_IS(
+                self.condition.location,
+                cond_register,
+                constant_register,
+                codegen.popRegister(),
+            );
         }
 
-        const then_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        const then_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         _ = try self.body.toByteCode(self.body, codegen, breaks);
 
         const else_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP);
 
         try codegen.patchJump(then_jump);
-        if (self.unwrapped_identifier != null or self.casted_type != null) {
-            // Since we did not enter the if block, we did not pop the unwrapped local
-            try codegen.emitOpCode(self.node.location, .OP_POP);
-        }
-        try codegen.emitOpCode(self.node.location, .OP_POP);
 
         if (self.else_branch) |else_branch| {
             _ = try else_branch.toByteCode(else_branch, codegen, breaks);
@@ -5300,10 +5552,10 @@ pub const ReturnNode = struct {
 
             _ = try value.toByteCode(value, codegen, breaks);
         } else {
-            try codegen.emitOpCode(self.node.location, .OP_VOID);
+            try codegen.OP_VOID(node.location, codegen.pushRegister());
         }
 
-        try codegen.emitOpCode(self.node.location, .OP_RETURN);
+        try codegen.OP_RETURN(self.node.location, codegen.popRegister());
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -5409,8 +5661,11 @@ pub const ForNode = struct {
 
         _ = try self.condition.toByteCode(self.condition, codegen, _breaks);
 
-        const exit_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition
+        const exit_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         // Jump over expressions which will be executed at end of loop
         // TODO: since we don't generate as we parse, we can get rid of this jump and just generate the post_loop later
@@ -5423,7 +5678,7 @@ pub const ForNode = struct {
             }
 
             _ = try expr.toByteCode(expr, codegen, _breaks);
-            try codegen.emitOpCode(expr.location, .OP_POP);
+            codegen.popRegister();
         }
 
         try codegen.emitLoop(self.node.location, loop_start);
@@ -5438,8 +5693,6 @@ pub const ForNode = struct {
         try codegen.emitLoop(self.node.location, expr_loop);
 
         try codegen.patchJump(exit_jump);
-
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition
 
         // Patch breaks
         for (breaks.items) |jump| {
@@ -5679,11 +5932,15 @@ pub const ForEachNode = struct {
             }
         }
 
+        // We push those on the stack because they become locals of the loop's body
         if (self.key) |key| {
             _ = try key.node.toByteCode(&key.node, codegen, _breaks);
+            try codegen.OP_PUSH(key.node.location, codegen.popRegister());
         }
         _ = try self.value.node.toByteCode(&self.value.node, codegen, _breaks);
+        try codegen.OP_PUSH(self.value.node.location, codegen.popRegister());
         _ = try self.iterable.toByteCode(self.iterable, codegen, _breaks);
+        try codegen.OP_PUSH(self.iterable.node.location, codegen.popRegister());
 
         const loop_start: usize = codegen.currentCode();
 
@@ -5701,12 +5958,29 @@ pub const ForEachNode = struct {
         );
 
         // If next key is null, exit loop
-        try codegen.emitCodeArg(self.node.location, .OP_GET_LOCAL, @intCast(u24, (self.key orelse self.value).slot));
-        try codegen.emitOpCode(self.node.location, .OP_NULL);
-        try codegen.emitOpCode(self.node.location, .OP_EQUAL);
-        try codegen.emitOpCode(self.node.location, .OP_NOT);
-        const exit_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition result
+        try codegen.OP_GET_LOCAL(
+            self.node.location,
+            @intCast(u25, (self.key orelse self.value).slot),
+            codegen.pushRegister(),
+        );
+        try codegen.OP_NULL(self.node.location, codegen.pushRegister());
+        try codegen.OP_EQUAL(
+            self.node.location,
+            codegen.popRegister(),
+            codegen.popRegister(),
+            codegen.pushRegister(),
+        );
+        try codegen.OP_NOT(
+            self.node.location,
+            codegen.popRegister(),
+            codegen.pushRegister(),
+        );
+
+        const exit_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         var breaks: std.ArrayList(usize) = std.ArrayList(usize).init(codegen.gc.allocator);
         defer breaks.deinit();
@@ -5717,8 +5991,6 @@ pub const ForEachNode = struct {
 
         // Patch condition jump
         try codegen.patchJump(exit_jump);
-
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition result
 
         // Patch breaks
         for (breaks.items) |jump| {
@@ -5857,8 +6129,11 @@ pub const WhileNode = struct {
 
         _ = try self.condition.toByteCode(self.condition, codegen, _breaks);
 
-        const exit_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        const exit_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         var breaks: std.ArrayList(usize) = std.ArrayList(usize).init(codegen.gc.allocator);
         defer breaks.deinit();
@@ -5867,8 +6142,6 @@ pub const WhileNode = struct {
 
         try codegen.emitLoop(self.node.location, loop_start);
         try codegen.patchJump(exit_jump);
-
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition (is not necessary if broke out of the loop)
 
         // Patch breaks
         for (breaks.items) |jump| {
@@ -5985,14 +6258,19 @@ pub const DoUntilNode = struct {
 
         _ = try self.condition.toByteCode(self.condition, codegen, &breaks);
 
-        try codegen.emitOpCode(self.node.location, .OP_NOT);
-        const exit_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        try codegen.OP_NOT(
+            self.condition.location,
+            codegen.popRegister(),
+            codegen.pushRegister(),
+        );
+        const exit_jump: usize = try codegen.emitJump(
+            self.node.location,
+            .OP_JUMP_IF_FALSE,
+            codegen.popRegister(),
+        );
 
         try codegen.emitLoop(self.node.location, loop_start);
         try codegen.patchJump(exit_jump);
-
-        try codegen.emitOpCode(self.node.location, .OP_POP); // Pop condition
 
         // Patch breaks
         for (breaks.items) |jump| {
@@ -6238,11 +6516,17 @@ pub const DotNode = struct {
         switch (callee_type.def_type) {
             .Fiber, .Pattern, .String => {
                 if (self.call) |call_node| { // Call
-                    try codegen.emitOpCode(self.node.location, .OP_COPY);
+                    // subject of invoke lives in last register
+                    try codegen.OP_PUSH(call_node.location, codegen.popRegister());
                     _ = try call_node.node.toByteCode(&call_node.node, codegen, breaks);
                 } else { // Expression
                     assert(self.value == null);
-                    try codegen.emitCodeArg(self.node.location, get_code.?, try codegen.identifierConstant(self.identifier.lexeme));
+                    try codegen.emitCodeArgReg(
+                        self.node.location,
+                        get_code.?,
+                        try codegen.identifierConstant(self.identifier.lexeme),
+                        codegen.pushRegister(),
+                    );
                 }
             },
             .ObjectInstance, .Object => {
@@ -6253,20 +6537,33 @@ pub const DotNode = struct {
 
                     _ = try value.toByteCode(value, codegen, breaks);
 
-                    try codegen.emitCodeArg(
+                    try codegen.emitCodeArgReg(
                         self.node.location,
                         if (callee_type.def_type == .ObjectInstance) .OP_SET_INSTANCE_PROPERTY else .OP_SET_OBJECT_PROPERTY,
-                        try codegen.identifierConstant(self.identifier.lexeme),
+                        @intCast(u17, try codegen.identifierConstant(self.identifier.lexeme)),
+                        codegen.popRegister(),
                     );
                 } else if (self.call) |call| {
                     // Static call
                     if (callee_type.def_type == .Object) {
-                        try codegen.emitCodeArg(node.location, get_code.?, try codegen.identifierConstant(self.identifier.lexeme));
+                        try codegen.emitCodeArgReg(
+                            call.location,
+                            get_code.?,
+                            try codegen.identifierConstant(self.identifier.lexeme),
+                            codegen.pushRegister(),
+                        );
+
+                        try codegen.OP_PUSH(call.location, codegen.popRegister());
                     }
 
                     _ = try call.node.toByteCode(&call.node, codegen, breaks);
                 } else {
-                    try codegen.emitCodeArg(self.node.location, get_code.?, try codegen.identifierConstant(self.identifier.lexeme));
+                    try codegen.emitCodeArgReg(
+                        self.node.location,
+                        get_code.?,
+                        try codegen.identifierConstant(self.identifier.lexeme),
+                        codegen.pushRegister(),
+                    );
                 }
             },
             .ProtocolInstance => {
@@ -6274,25 +6571,40 @@ pub const DotNode = struct {
                     _ = try call.node.toByteCode(&call.node, codegen, breaks);
                 } else {
                     assert(self.value == null);
-                    try codegen.emitCodeArg(self.node.location, get_code.?, try codegen.identifierConstant(self.identifier.lexeme));
+                    try codegen.emitCodeArgReg(
+                        self.node.location,
+                        get_code.?,
+                        try codegen.identifierConstant(self.identifier.lexeme),
+                        codegen.pushRegister(),
+                    );
                 }
             },
             .Enum => {
-                try codegen.emitCodeArg(self.node.location, .OP_GET_ENUM_CASE, @intCast(u24, self.enum_index.?));
+                try codegen.OP_GET_ENUM_CASE(
+                    self.node.location,
+                    @intCast(u25, self.enum_index.?),
+                    codegen.popRegister(),
+                );
             },
             .EnumInstance => {
                 assert(std.mem.eql(u8, self.identifier.lexeme, "value"));
 
-                try codegen.emitOpCode(self.node.location, .OP_GET_ENUM_CASE_VALUE);
+                try codegen.OP_GET_ENUM_CASE_VALUE(self.node.location, codegen.popRegister());
             },
             .List, .Map => {
-                if (self.call) |call| {
-                    try codegen.emitOpCode(self.node.location, .OP_COPY);
+                if (self.call) |call_node| {
+                    // subject of invoke lives in last register
+                    try codegen.OP_PUSH(call_node.location, codegen.popRegister());
 
-                    _ = try call.node.toByteCode(&call.node, codegen, breaks);
+                    _ = try call_node.node.toByteCode(&call_node.node, codegen, breaks);
                 } else {
                     assert(self.value == null);
-                    try codegen.emitCodeArg(self.node.location, get_code.?, try codegen.identifierConstant(self.identifier.lexeme));
+                    try codegen.emitCodeArgReg(
+                        self.node.location,
+                        get_code.?,
+                        try codegen.identifierConstant(self.identifier.lexeme),
+                        codegen.pushRegister(),
+                    );
                 }
             },
             else => unreachable,
@@ -6408,14 +6720,15 @@ pub const ObjectInitNode = struct {
             _ = try object.toByteCode(object, codegen, breaks);
         } else {
             // Anonymous object, we push its type
-            try codegen.emitCodeArg(
+            try codegen.OP_CONSTANT(
                 node.location,
-                .OP_CONSTANT,
                 try codegen.makeConstant(node.type_def.?.toValue()),
+                codegen.pushRegister(),
             );
         }
 
-        try codegen.emitOpCode(self.node.location, .OP_INSTANCE);
+        try codegen.OP_INSTANCE(self.node.location, codegen.pushRegister());
+        const instance_register = codegen.peekRegister(0);
 
         if (node.type_def == null or node.type_def.?.def_type == .Placeholder) {
             try codegen.reportPlaceholder(node.type_def.?.resolved_type.?.Placeholder);
@@ -6431,12 +6744,10 @@ pub const ObjectInitNode = struct {
         defer init_properties.deinit();
 
         for (self.properties.keys()) |property_name| {
-            const property_name_constant: u24 = try codegen.identifierConstant(property_name);
+            const property_name_constant = try codegen.identifierConstant(property_name);
             const value = self.properties.get(property_name).?;
 
             if (obj_def.fields.get(property_name)) |prop| {
-                try codegen.emitCodeArg(self.node.location, .OP_COPY, 0); // Will be popped by OP_SET_PROPERTY
-
                 if (value.type_def == null or value.type_def.?.def_type == .Placeholder) {
                     try codegen.reportPlaceholder(value.type_def.?.resolved_type.?.Placeholder);
                 } else if (!prop.eql(value.type_def.?)) {
@@ -6458,8 +6769,12 @@ pub const ObjectInitNode = struct {
 
                 try init_properties.put(property_name, {});
 
-                try codegen.emitCodeArg(self.node.location, .OP_SET_INSTANCE_PROPERTY, property_name_constant);
-                try codegen.emitOpCode(self.node.location, .OP_POP); // Pop property value
+                try codegen.OP_SET_INSTANCE_PROPERTY(
+                    self.node.location,
+                    instance_register,
+                    property_name_constant,
+                    codegen.popRegister(),
+                );
             } else {
                 try codegen.reportErrorFmt(node.location, "Property `{s}` does not exists", .{property_name});
             }
@@ -6639,19 +6954,25 @@ pub const ObjectDeclarationNode = struct {
         const object_type_constant = try codegen.makeConstant(object_type.toValue());
 
         // Put  object on the stack and define global with it
-        try codegen.emitCodeArg(self.node.location, .OP_OBJECT, name_constant);
-        try codegen.emit(self.node.location, @intCast(u32, object_type_constant));
-        try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(u24, self.slot));
-
-        // Put the object on the stack to set its fields
-        try codegen.emitCodeArg(self.node.location, .OP_GET_GLOBAL, @intCast(u24, self.slot));
+        try codegen.OP_OBJECT(
+            self.node.location,
+            name_constant,
+            object_type_constant,
+            codegen.pushRegister(),
+        );
+        const object_register = codegen.peekRegister(0);
+        try codegen.OP_DEFINE_GLOBAL(
+            self.node.location,
+            @intCast(u17, self.slot),
+            object_register,
+        );
 
         // Methods
         var it = self.methods.iterator();
         while (it.next()) |kv| {
             const member_name = kv.key_ptr.*;
             const member = kv.value_ptr.*;
-            const member_name_constant: u24 = try codegen.identifierConstant(member_name);
+            const member_name_constant = try codegen.identifierConstant(member_name);
 
             if (member.type_def == null or member.type_def.?.def_type == .Placeholder) {
                 try codegen.reportPlaceholder(member.type_def.?.resolved_type.?.Placeholder);
@@ -6660,7 +6981,21 @@ pub const ObjectDeclarationNode = struct {
             const is_static = object_def.static_fields.get(member_name) != null;
 
             _ = try member.toByteCode(member, codegen, breaks);
-            try codegen.emitCodeArg(self.node.location, if (is_static) .OP_PROPERTY else .OP_METHOD, member_name_constant);
+            if (is_static) {
+                try codegen.OP_PROPERTY(
+                    self.node.location,
+                    object_register,
+                    member_name_constant,
+                    codegen.popRegister(),
+                );
+            } else {
+                try codegen.OP_METHOD(
+                    self.node.location,
+                    object_register,
+                    member_name_constant,
+                    codegen.popRegister(),
+                );
+            }
         }
 
         // Properties
@@ -6682,24 +7017,29 @@ pub const ObjectDeclarationNode = struct {
                     try codegen.reportTypeCheckAt(property_type.?, default.type_def.?, "Wrong property default value type", default.location);
                 }
 
-                if (is_static) {
-                    try codegen.emitOpCode(self.node.location, .OP_COPY);
-                }
-
                 _ = try default.toByteCode(default, codegen, breaks);
 
                 // Create property default value
                 if (is_static) {
-                    try codegen.emitCodeArg(self.node.location, .OP_SET_OBJECT_PROPERTY, member_name_constant);
-                    try codegen.emitOpCode(self.node.location, .OP_POP);
+                    try codegen.OP_SET_OBJECT_PROPERTY(
+                        default.location,
+                        object_register,
+                        member_name_constant,
+                        codegen.popRegister(),
+                    );
                 } else {
-                    try codegen.emitCodeArg(self.node.location, .OP_PROPERTY, member_name_constant);
+                    try codegen.OP_PROPERTY(
+                        default.location,
+                        object_register,
+                        member_name_constant,
+                        codegen.popRegister(),
+                    );
                 }
             }
         }
 
-        // Pop object
-        try codegen.emitOpCode(self.node.location, .OP_POP);
+        // Pop register holding object
+        codegen.popRegister();
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -7042,13 +7382,16 @@ pub const ImportNode = struct {
         var self = Self.cast(node).?;
 
         if (self.import) |import| {
-            try codegen.emitConstant(
-                node.location,
-                import.absolute_path.toValue(),
-            );
             _ = try import.function.toByteCode(import.function, codegen, breaks);
+
             // FIXME: avoid generating the same import function more than once!
-            try codegen.emitOpCode(self.node.location, .OP_IMPORT);
+            try codegen.OP_IMPORT(
+                self.node.location,
+                try codegen.makeConstant(
+                    import.absolute_path.toValue(),
+                ),
+                codegen.popRegister(),
+            );
         }
 
         try node.patchOptJumps(codegen);

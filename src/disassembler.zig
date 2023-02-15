@@ -181,8 +181,6 @@ pub fn disassembleInstruction(chunk: *Chunk, offset: usize) !usize {
         .OP_GET_ENUM_CASE_FROM_VALUE,
         => simpleInstruction(instruction, offset),
 
-        .OP_SWAP => bytesInstruction(instruction, chunk, offset),
-
         .OP_DEFINE_GLOBAL,
         .OP_GET_GLOBAL,
         .OP_SET_GLOBAL,
@@ -193,8 +191,6 @@ pub fn disassembleInstruction(chunk: *Chunk, offset: usize) !usize {
         .OP_GET_ENUM_CASE,
         .OP_MAP,
         .OP_EXPORT,
-        .OP_COPY,
-        .OP_CLONE,
         .OP_CLOSE_UPVALUE,
         .OP_RETURN,
         => byteInstruction(instruction, chunk, offset),

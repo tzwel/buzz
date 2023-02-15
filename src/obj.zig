@@ -1392,7 +1392,7 @@ pub const ObjList = struct {
             if (mem.eql(u8, method, "append")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 // `value` arg is of item_type
@@ -1420,7 +1420,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "remove")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 var at_type = try parser.gc.type_registry.getTypeDef(
@@ -1494,7 +1494,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "next")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 // `key` arg is number
@@ -1541,7 +1541,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "sub")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the string.
 
                 try parameters.put(
@@ -1594,7 +1594,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "indexOf")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the string.
 
                 try parameters.put(try parser.gc.copyString("needle"), self.item_type);
@@ -1631,7 +1631,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "join")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the string.
 
                 try parameters.put(try parser.gc.copyString("separator"), try parser.gc.type_registry.getTypeDef(.{ .def_type = .String }));
@@ -1665,7 +1665,7 @@ pub const ObjList = struct {
             } else if (mem.eql(u8, method, "insert")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 try parameters.put(
@@ -1718,7 +1718,7 @@ pub const ObjList = struct {
 
                 return native_type;
             } else if (mem.eql(u8, method, "forEach")) {
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
@@ -1774,7 +1774,7 @@ pub const ObjList = struct {
 
                 return native_type;
             } else if (mem.eql(u8, method, "map")) {
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
@@ -1860,7 +1860,7 @@ pub const ObjList = struct {
 
                 return native_type;
             } else if (mem.eql(u8, method, "filter")) {
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
@@ -2012,7 +2012,7 @@ pub const ObjList = struct {
 
                 return native_type;
             } else if (mem.eql(u8, method, "sort")) {
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
@@ -2257,7 +2257,7 @@ pub const ObjMap = struct {
             } else if (mem.eql(u8, method, "remove")) {
                 var parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                // We omit first arg: it'll be OP_SWAPed in and we already parsed it
+                // We omit first arg: it'll aready be on the stack
                 // It's always the list.
 
                 try parameters.put(try parser.gc.copyString("at"), self.key_type);
