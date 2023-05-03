@@ -16,7 +16,6 @@ const FunctionNode = @import("./node.zig").FunctionNode;
 const BuildOptions = @import("build_options");
 const clap = @import("ext/clap/clap.zig");
 const GarbageCollector = @import("./memory.zig").GarbageCollector;
-const JIT = @import("./jit.zig").JIT;
 
 fn toNullTerminated(allocator: std.mem.Allocator, string: []const u8) ![:0]u8 {
     return allocator.dupeZ(u8, string);
@@ -116,7 +115,10 @@ fn runFile(allocator: Allocator, file_name: []const u8, args: [][:0]u8, flavor: 
             const codegen_ms: f64 = @intToFloat(f64, codegen_time) / 1000000;
             const running_ms: f64 = @intToFloat(f64, running_time) / 1000000;
             const gc_ms: f64 = @intToFloat(f64, gc.gc_time) / 1000000;
-            const jit_ms: f64 = if (vm.jit) |jit| @intToFloat(f64, jit.jit_time) / 1000000 else 0;
+            const jit_ms: f64 = if (vm.mir_jit) |jit|
+                @intToFloat(f64, jit.jit_time) / 1000000
+            else
+                0;
             std.debug.print(
                 "\u{001b}[2mParsing: {d} ms | Codegen: {d} ms | Run: {d} ms | Total: {d} ms\nGC: {d} ms | Full GC: {} | GC: {} | Max allocated: {} bytes\nJIT: {d} ms\n\u{001b}[0m",
                 .{
@@ -167,7 +169,7 @@ pub fn main() !void {
     };
     defer res.deinit();
 
-    if (res.args.version) {
+    if (res.args.version == 1) {
         std.debug.print(
             "👨‍🚀 buzz {s}-{s} Copyright (C) 2021-2022 Benoit Giannangeli\nBuilt with Zig {} {s}\nAllocator: {s}\nJIT: {s}\n",
             .{
@@ -183,14 +185,17 @@ pub fn main() !void {
                 if (builtin.mode == .Debug)
                     "gpa"
                 else if (BuildOptions.use_mimalloc) "mimalloc" else "c_allocator",
-                if (BuildOptions.jit) "LLVM 15.0.6" else "no",
+                if (BuildOptions.jit)
+                    "on"
+                else
+                    "off",
             },
         );
 
         std.os.exit(0);
     }
 
-    if (res.args.help or res.positionals.len == 0) {
+    if (res.args.help == 1 or res.positionals.len == 0) {
         std.debug.print("👨‍🚀 buzz A small/lightweight typed scripting language\n\nUsage: buzz ", .{});
 
         try clap.usage(
@@ -226,7 +231,16 @@ pub fn main() !void {
         positionals.deinit();
     }
 
-    const flavor: RunFlavor = if (res.args.check) RunFlavor.Check else if (res.args.@"test") RunFlavor.Test else if (res.args.fmt) RunFlavor.Fmt else if (res.args.tree) RunFlavor.Ast else RunFlavor.Run;
+    const flavor: RunFlavor = if (res.args.check == 1)
+        RunFlavor.Check
+    else if (res.args.@"test" == 1)
+        RunFlavor.Test
+    else if (res.args.fmt == 1)
+        RunFlavor.Fmt
+    else if (res.args.tree == 1)
+        RunFlavor.Ast
+    else
+        RunFlavor.Run;
 
     runFile(
         allocator,

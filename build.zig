@@ -28,7 +28,7 @@ const BuzzJITOptions = struct {
 
     pub fn step(self: BuzzJITOptions, options: *std.build.OptionsStep) void {
         options.addOption(@TypeOf(self.debug), "jit_debug", self.debug);
-        options.addOption(@TypeOf(self.on), "jit_debug_on", self.debug_on);
+        options.addOption(@TypeOf(self.debug_on), "jit_debug_on", self.debug_on);
         options.addOption(@TypeOf(self.on), "jit", self.on);
         options.addOption(@TypeOf(self.prof_threshold), "jit_prof_threshold", self.prof_threshold);
     }
@@ -77,7 +77,7 @@ const BuzzBuildOptions = struct {
 pub fn build(b: *Build) !void {
     // Check minimum zig version
     const current_zig = builtin.zig_version;
-    const min_zig = std.SemanticVersion.parse("0.11.0-dev.1580+a5b34a61a") catch return;
+    const min_zig = std.SemanticVersion.parse("0.11.0-dev.2939+289234744") catch return;
     if (current_zig.order(min_zig).compare(.lt)) {
         @panic(b.fmt("Your Zig version v{} does not meet the minimum build requirement of v{}", .{ current_zig, min_zig }));
     }
@@ -212,7 +212,7 @@ pub fn build(b: *Build) !void {
                 bool,
                 "jit",
                 "Turn on JIT engine",
-            ) orelse false,
+            ) orelse true,
             .prof_threshold = b.option(
                 f128,
                 "jit_prof_threshold",
@@ -231,10 +231,12 @@ pub fn build(b: *Build) !void {
     var llibs = std.ArrayList([]const u8).init(std.heap.page_allocator);
     defer llibs.deinit();
 
-    sys_libs.appendSlice(&[_][]const u8{
-        "llvm-15",
-        "pcre",
-    }) catch unreachable;
+    sys_libs.appendSlice(
+        &[_][]const u8{
+            "mir",
+            "pcre",
+        },
+    ) catch unreachable;
     if (build_options.use_mimalloc) {
         sys_libs.append("mimalloc") catch unreachable;
     }
@@ -242,27 +244,18 @@ pub fn build(b: *Build) !void {
     includes.appendSlice(&[_][]const u8{
         "/usr/local/include",
         "/usr/include",
+        "mir",
     }) catch unreachable;
 
     llibs.appendSlice(&[_][]const u8{
         "/usr/local/lib",
         "/usr/lib",
+        "mir",
     }) catch unreachable;
 
     if (builtin.os.tag == .macos) {
         includes.append("/opt/homebrew/include") catch unreachable;
         llibs.append("/opt/homebrew/lib") catch unreachable;
-    }
-
-    if (std.os.getenv("LLVM_PATH")) |llvm_path| {
-        var inc = std.ArrayList(u8).init(std.heap.page_allocator);
-        var lib = std.ArrayList(u8).init(std.heap.page_allocator);
-
-        inc.writer().print("{s}/include", .{llvm_path}) catch unreachable;
-        lib.writer().print("{s}/lib", .{llvm_path}) catch unreachable;
-
-        includes.append(inc.items) catch unreachable;
-        llibs.append(lib.items) catch unreachable;
     }
 
     var exe = b.addExecutable(.{
@@ -271,8 +264,8 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = build_mode,
     });
-    exe.setOutputDir("dist");
-    exe.install();
+    // exe.setOutputDir("dist");
+    b.installArtifact(exe);
     for (includes.items) |include| {
         exe.addIncludePath(include);
     }
@@ -295,8 +288,8 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = build_mode,
     });
-    lib.setOutputDir("dist/lib");
-    lib.install();
+    // lib.setOutputDir("dist/lib");
+    b.installArtifact(lib);
     for (includes.items) |include| {
         lib.addIncludePath(include);
     }
@@ -355,15 +348,15 @@ pub fn build(b: *Build) !void {
     };
 
     var libs = [_]*std.build.LibExeObjStep{undefined} ** lib_names.len;
-    for (lib_paths) |lib_path, index| {
+    for (lib_paths, 0..) |lib_path, index| {
         var std_lib = b.addSharedLibrary(.{
             .name = lib_names[index],
             .root_source_file = Build.FileSource.relative(lib_path),
             .target = target,
             .optimize = build_mode,
         });
-        std_lib.setOutputDir("dist/lib");
-        std_lib.install();
+        // std_lib.setOutputDir("dist/lib");
+        b.installArtifact(std_lib);
         for (includes.items) |include| {
             std_lib.addIncludePath(include);
         }
@@ -406,28 +399,7 @@ pub fn build(b: *Build) !void {
     // debug <- std
     libs[6].linkLibrary(libs[0]);
 
-    const test_step = b.step("test", "Run all the tests");
-    test_step.dependOn(b.getInstallStep());
-
-    var unit_tests = b.addTest(.{
-        .root_source_file = Build.FileSource.relative("src/main.zig"),
-        .target = target,
-    });
-    for (includes.items) |include| {
-        unit_tests.addIncludePath(include);
-    }
-    for (llibs.items) |llib| {
-        unit_tests.addLibraryPath(llib);
-    }
-    for (sys_libs.items) |slib| {
-        unit_tests.linkSystemLibrary(slib);
-    }
-    if (!build_options.use_mimalloc) {
-        unit_tests.linkLibC();
-    }
-    unit_tests.addOptions("build_options", build_options.step(b));
-    test_step.dependOn(&unit_tests.step);
-
+    // FIXME: maybe should use b.installFile or something?
     // Copy {lib}.buzz files to dist/lib
     for (all_lib_names) |name| {
         var lib_name = std.ArrayList(u8).init(std.heap.page_allocator);
@@ -445,4 +417,27 @@ pub fn build(b: *Build) !void {
             .{},
         ) catch unreachable;
     }
+
+    const test_step = b.step("test", "Run all the tests");
+
+    const unit_tests = b.addTest(.{
+        .root_source_file = Build.FileSource.relative("src/main.zig"),
+        .target = target,
+    });
+    for (includes.items) |include| {
+        unit_tests.addIncludePath(include);
+    }
+    for (llibs.items) |llib| {
+        unit_tests.addLibraryPath(llib);
+    }
+    for (sys_libs.items) |slib| {
+        unit_tests.linkSystemLibrary(slib);
+    }
+    if (!build_options.use_mimalloc) {
+        unit_tests.linkLibC();
+    }
+    unit_tests.addOptions("build_options", build_options.step(b));
+    b.installArtifact(unit_tests);
+
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 }

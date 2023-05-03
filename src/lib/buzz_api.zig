@@ -57,6 +57,15 @@ pub const VM = opaque {
     pub extern fn bz_pushEnumInstance(vm: *VM, payload: *ObjEnumInstance) void;
     pub extern fn bz_pushError(self: *VM, qualified_name: [*]const u8, len: usize) void;
     pub extern fn bz_pushErrorEnum(self: *VM, qualified_name: [*]const u8, name_len: usize, case: [*]const u8, case_len: usize) void;
+
+    pub inline fn pushError(self: *VM, qualified_name: []const u8) void {
+        self.bz_pushError(qualified_name.ptr, qualified_name.len);
+    }
+
+    pub inline fn pushErrorEnum(self: *VM, qualified_name: []const u8, case: []const u8) void {
+        self.bz_pushErrorEnum(qualified_name.ptr, qualified_name.len, case.ptr, case.len);
+    }
+
     pub extern fn bz_throw(vm: *VM, value: Value) void;
     pub extern fn bz_rethrow(vm: *VM) void;
     pub extern fn bz_throwString(vm: *VM, message: ?[*]const u8, len: usize) void;
@@ -69,14 +78,13 @@ pub const VM = opaque {
     pub extern fn bz_setTryCtx(self: *VM) *TryCtx;
     pub extern fn bz_popTryCtx(self: *VM) void;
 
-    pub extern fn bz_getGlobals(closure: Value) [*]Value;
-    pub extern fn bz_getUpValues(closure: Value) [*]*ObjUpValue;
     pub extern fn bz_closeUpValues(vm: *VM, last: *Value) void;
     pub extern fn bz_getUpValue(ctx: *NativeCtx, slot: usize) Value;
     pub extern fn bz_setUpValue(ctx: *NativeCtx, slot: usize, value: Value) void;
     pub extern fn bz_closure(ctx: *NativeCtx, function_node: *FunctionNode, native: *anyopaque, native_raw: *anyopaque) Value;
     pub extern fn bz_bindMethod(vm: *VM, receiver: Value, method_value: Value, native_value: Value) Value;
     pub extern fn bz_context(ctx: *NativeCtx, closure_value: Value, new_ctx: *NativeCtx, arg_count: usize) *anyopaque;
+    pub extern fn bz_clone(vm: *VM, value: Value) Value;
 
     pub extern fn bz_dumpStack(vm: *VM) void;
 
@@ -205,7 +213,6 @@ pub const Value = packed struct {
 
     pub extern fn bz_valueIsBuzzFn(value: Value) bool;
     pub extern fn bz_valueToClosure(value: Value) *ObjClosure;
-    pub extern fn bz_valueToExternNativeFn(value: Value) *anyopaque;
     pub extern fn bz_valueEqual(self: Value, other: Value) Value;
     pub extern fn bz_valueIs(self: Value, type_def: Value) Value;
 };
@@ -284,3 +291,5 @@ pub const ObjPattern = opaque {
 pub const ObjFiber = opaque {
     pub extern fn bz_getFiberField(vm: *VM, field_name_value: Value) Value;
 };
+
+pub extern fn dumpInt(value: u64) void;

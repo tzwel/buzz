@@ -5,13 +5,13 @@ const _value = @import("./value.zig");
 const _chunk = @import("./chunk.zig");
 const _disassembler = @import("./disassembler.zig");
 const _obj = @import("./obj.zig");
+const _node = @import("./node.zig");
 const Allocator = std.mem.Allocator;
 const BuildOptions = @import("build_options");
 const _memory = @import("./memory.zig");
 const GarbageCollector = _memory.GarbageCollector;
 const TypeRegistry = _memory.TypeRegistry;
-const _jit = @import("jit.zig");
-const JIT = _jit.JIT;
+const MIRJIT = @import("mirjit.zig");
 
 const Value = _value.Value;
 const floatToInteger = _value.floatToInteger;
@@ -40,6 +40,7 @@ const ObjEnumInstance = _obj.ObjEnumInstance;
 const ObjBoundMethod = _obj.ObjBoundMethod;
 const ObjTypeDef = _obj.ObjTypeDef;
 const ObjPattern = _obj.ObjPattern;
+const FunctionNode = _node.FunctionNode;
 const cloneObject = _obj.cloneObject;
 const OpCode = _chunk.OpCode;
 const Chunk = _chunk.Chunk;
@@ -325,7 +326,7 @@ pub const VM = struct {
     current_fiber: *Fiber,
     globals: std.ArrayList(Value),
     import_registry: *ImportRegistry,
-    jit: ?JIT = null,
+    mir_jit: ?MIRJIT = null,
     testing: bool,
 
     pub fn init(gc: *GarbageCollector, import_registry: *ImportRegistry, testing: bool) !Self {
@@ -340,13 +341,17 @@ pub const VM = struct {
         return self;
     }
 
-    pub fn deinit(_: *Self) void {
+    pub fn deinit(self: *Self) void {
         // TODO: we can't free this because exported closure refer to it
         // self.globals.deinit();
+        if (BuildOptions.jit) {
+            self.mir_jit.?.deinit();
+            self.mir_jit = null;
+        }
     }
 
     pub fn initJIT(self: *Self) !void {
-        self.jit = JIT.init(self);
+        self.mir_jit = MIRJIT.init(self);
     }
 
     pub fn cliArgs(self: *Self, args: ?[][:0]u8) !*ObjList {
@@ -384,7 +389,7 @@ pub const VM = struct {
         self.push(arg_list.toValue());
 
         if (args) |uargs| {
-            for (uargs) |arg, index| {
+            for (uargs, 0..) |arg, index| {
                 // We can't have more than 255 arguments to a function
                 // TODO: should we silently ignore them or should we raise an error?
                 if (index >= 255) {
@@ -460,7 +465,7 @@ pub const VM = struct {
         return self.currentFrame().?.closure.globals;
     }
 
-    pub fn interpret(self: *Self, function: *ObjFunction, args: ?[][:0]u8) JIT.Error!void {
+    pub fn interpret(self: *Self, function: *ObjFunction, args: ?[][:0]u8) MIRJIT.Error!void {
         self.current_fiber.* = try Fiber.init(
             self.gc.allocator,
             null, // parent fiber
@@ -642,7 +647,7 @@ pub const VM = struct {
 
     fn dispatch(self: *Self, current_frame: *CallFrame, full_instruction: Instruction, instruction: OpCode, arg: FullArg) void {
         if (BuildOptions.debug_stack) {
-            dumpStack(self) catch unreachable;
+            dumpStack(self);
         }
 
         if (BuildOptions.debug_current_instruction or BuildOptions.debug_stack) {
@@ -914,7 +919,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_CONSTANT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_CONSTANT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
         const reg = @intCast(Reg, 0x000000ff & instruction);
 
@@ -2072,7 +2077,7 @@ pub const VM = struct {
         var enum_: *ObjEnum = ObjEnum.cast(self.pop().obj()).?;
 
         var found = false;
-        for (enum_.cases.items) |case, index| {
+        for (enum_.cases.items, 0..) |case, index| {
             if (valueEql(case, case_value)) {
                 var enum_case: *ObjEnumInstance = self.gc.allocateObject(ObjEnumInstance, ObjEnumInstance{
                     .enum_ref = enum_,
@@ -3315,7 +3320,7 @@ pub const VM = struct {
         );
     }
 
-    pub fn throw(self: *Self, code: Error, payload: Value) JIT.Error!void {
+    pub fn throw(self: *Self, code: Error, payload: Value) MIRJIT.Error!void {
         var stack = std.ArrayList(CallFrame).init(self.gc.allocator);
         defer stack.deinit();
 
@@ -3396,20 +3401,20 @@ pub const VM = struct {
     }
 
     // FIXME: catch_values should be on the stack like arguments
-    fn call(self: *Self, closure: *ObjClosure, arg_count: u8, catch_value: ?Value, in_fiber: bool, dest_register: Reg) JIT.Error!void {
+    fn call(self: *Self, closure: *ObjClosure, arg_count: u8, catch_value: ?Value, in_fiber: bool, dest_register: Reg) MIRJIT.Error!void {
         closure.function.call_count += 1;
 
         var native = closure.function.native;
-        if (self.jit) |*jit| {
-            jit.call_count += 1;
+        if (self.mir_jit) |*mir_jit| {
+            mir_jit.call_count += 1;
             // Do we need to jit the function?
             // TODO: figure out threshold strategy
-            if (!in_fiber and jit.shouldCompileFunction(closure)) {
+            if (!in_fiber and self.shouldCompileFunction(closure)) {
                 var timer = std.time.Timer.start() catch unreachable;
 
                 var success = true;
-                jit.compileFunction(closure) catch |err| {
-                    if (err == JIT.Error.CantCompile) {
+                mir_jit.compileFunction(closure) catch |err| {
+                    if (err == MIRJIT.Error.CantCompile) {
                         success = false;
                     } else {
                         return err;
@@ -3426,7 +3431,7 @@ pub const VM = struct {
                     );
                 }
 
-                jit.jit_time += timer.read();
+                mir_jit.jit_time += timer.read();
 
                 if (success) {
                     native = closure.function.native;
@@ -3585,7 +3590,7 @@ pub const VM = struct {
         self.push(Value.fromObj(bound.toObj()));
     }
 
-    pub fn callValue(self: *Self, callee: Value, arg_count: u8, catch_value: ?Value, in_fiber: bool, dest_register: Reg) JIT.Error!void {
+    pub fn callValue(self: *Self, callee: Value, arg_count: u8, catch_value: ?Value, in_fiber: bool, dest_register: Reg) MIRJIT.Error!void {
         var obj: *Obj = callee.obj();
         switch (obj.obj_type) {
             .Bound => {
@@ -3803,5 +3808,25 @@ pub const VM = struct {
         }
 
         return created_upvalue;
+    }
+
+    fn shouldCompileFunction(self: *Self, closure: *ObjClosure) bool {
+        const function_type = closure.function.type_def.resolved_type.?.Function.function_type;
+
+        if (function_type == .Extern or function_type == .Script or function_type == .ScriptEntryPoint or function_type == .EntryPoint) {
+            return false;
+        }
+
+        if (self.mir_jit != null and (self.mir_jit.?.compiled_closures.get(closure) != null or self.mir_jit.?.blacklisted_closures.get(closure) != null)) {
+            return false;
+        }
+
+        const function_node = @ptrCast(*FunctionNode, @alignCast(@alignOf(FunctionNode), closure.function.node));
+        const user_hot = function_node.node.docblock != null and std.mem.indexOf(u8, function_node.node.docblock.?.lexeme, "@hot") != null;
+
+        return if (BuildOptions.jit_debug_on)
+            return true
+        else
+            (BuildOptions.jit_debug and user_hot) or (closure.function.call_count > 10 and (@intToFloat(f128, closure.function.call_count) / @intToFloat(f128, self.mir_jit.?.call_count)) > BuildOptions.jit_prof_threshold);
     }
 };
