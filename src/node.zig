@@ -3148,6 +3148,7 @@ pub const TryNode = struct {
         // Tell runtime we're not in a try block anymore
         try codegen.emitOpCode(node.location, .OP_TRY_END);
         // Uncaught error, throw the error again
+        // FIXME: The error is sitting on the stack as a local but OP_THROW needs it in a register
         try codegen.emitOpCode(node.location, .OP_THROW);
 
         // Patch exit jumps

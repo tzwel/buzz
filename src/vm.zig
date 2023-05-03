@@ -992,7 +992,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_CLOSURE(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_CLOSURE(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
         const reg = @intCast(Reg, 0x000000ff & instruction);
 
@@ -1097,7 +1097,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_INVOKE_ROUTINE(self: *Self, _: *CallFrame, instruction: Instruction, instruction: OpCode, arg: FullArg) void {
+    fn OP_INVOKE_ROUTINE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
         const method: *ObjString = self.readString(arg);
         const arg_instruction: u32 = self.readInstruction();
         const arg_count: u8 = @intCast(u8, arg_instruction >> 25);
@@ -1107,10 +1107,7 @@ pub const VM = struct {
         const stack_len = arg_count + catch_count + 1;
         const stack_slice = stack_ptr[0..stack_len];
 
-        var fiber = self.gc.allocator.create(Fiber) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var fiber = self.gc.allocator.create(Fiber) catch @panic("Could not create fiber");
         fiber.* = Fiber.init(
             self.gc.allocator,
             self.current_fiber,
@@ -1119,10 +1116,7 @@ pub const VM = struct {
             arg_count,
             catch_count > 0,
             method,
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Could not create fiber");
 
         // Pop arguments and catch clauses
         self.current_fiber.stack_top = self.current_fiber.stack_top - stack_len;
@@ -1133,10 +1127,7 @@ pub const VM = struct {
         var obj_fiber = self.gc.allocateObject(ObjFiber, ObjFiber{
             .fiber = fiber,
             .type_def = type_def,
-        }) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        }) catch @panic("Could not create fiber");
 
         self.push(obj_fiber.toValue());
 
@@ -1321,24 +1312,27 @@ pub const VM = struct {
         );
     }
 
-    fn OP_PATTERN_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
-        const method: *ObjString = self.readString(arg);
+    fn OP_PATTERN_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const method: *ObjString = self.readString(constant);
         const arg_instruction: u32 = self.readInstruction();
         const arg_count: u8 = @intCast(u8, arg_instruction >> 25);
         const catch_count: u24 = @intCast(u8, 0x01ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
-        const member = (ObjPattern.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (ObjPattern.member(self, method) catch @panic("Could not get pattern member")).?;
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
 
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(
+            member_value,
+            arg_count,
+            catch_value,
+            false,
+            reg,
+        ) catch @panic("Could not call pattern method");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1354,23 +1348,26 @@ pub const VM = struct {
         );
     }
 
-    fn OP_FIBER_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
-        const method: *ObjString = self.readString(arg);
+    fn OP_FIBER_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const method: *ObjString = self.readString(constant);
         const arg_instruction: u32 = self.readInstruction();
         const arg_count: u8 = @intCast(u8, arg_instruction >> 25);
         const catch_count: u24 = @intCast(u8, 0x01ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
-        const member = (ObjFiber.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (ObjFiber.member(self, method) catch @panic("Could not get fiber method")).?;
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(
+            member_value,
+            arg_count,
+            catch_value,
+            false,
+            reg,
+        ) catch @panic("Could not call fiber method");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1386,25 +1383,28 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LIST_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
-        const method: *ObjString = self.readString(arg);
+    fn OP_LIST_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const method: *ObjString = self.readString(constant);
         const arg_instruction: u32 = self.readInstruction();
         const arg_count: u8 = @intCast(u8, arg_instruction >> 25);
         const catch_count: u24 = @intCast(u8, 0x01ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
         const list = ObjList.cast(self.peek(arg_count).obj()).?;
-        const member = (list.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (list.member(self, method) catch @panic("Could not get list method")).?;
 
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(
+            member_value,
+            arg_count,
+            catch_value,
+            false,
+            reg,
+        ) catch @panic("Could not call list method");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1420,25 +1420,28 @@ pub const VM = struct {
         );
     }
 
-    fn OP_MAP_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
-        const method: *ObjString = self.readString(arg);
+    fn OP_MAP_INVOKE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const method: *ObjString = self.readString(constant);
         const arg_instruction: u32 = self.readInstruction();
         const arg_count: u8 = @intCast(u8, arg_instruction >> 25);
         const catch_count: u24 = @intCast(u8, 0x01ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
         const map = ObjMap.cast(self.peek(arg_count).obj()).?;
-        const member = (map.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (map.member(self, method) catch @panic("Could not get map method")).?;
 
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(
+            member_value,
+            arg_count,
+            catch_value,
+            false,
+            reg,
+        ) catch @panic("Could not call map method");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1455,8 +1458,8 @@ pub const VM = struct {
     }
 
     // result_count > 0 when the return is `export`
-    inline fn returnFrame(self: *Self) bool {
-        const result = self.pop();
+    inline fn returnFrame(self: *Self, value_register: Reg) bool {
+        const result = self.current_fiber.registers[value_register];
 
         const frame: *CallFrame = self.currentFrame().?;
 
@@ -1469,10 +1472,7 @@ pub const VM = struct {
         if (self.current_fiber.frame_count == 0) {
             // We're in a fiber
             if (self.current_fiber.parent_fiber != null) {
-                self.current_fiber.finish(self, result) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                self.current_fiber.finish(self, result) catch @panic("Could not finish fiber");
 
                 // Don't stop the VM
                 return false;
@@ -1491,8 +1491,8 @@ pub const VM = struct {
         return false;
     }
 
-    fn OP_RETURN(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        if (self.returnFrame() or self.currentFrame().?.in_native_call) {
+    fn OP_RETURN(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        if (self.returnFrame(reg) or self.currentFrame().?.in_native_call) {
             return;
         }
 
@@ -1510,43 +1510,34 @@ pub const VM = struct {
         );
     }
 
-    fn OP_EXPORT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_EXPORT(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         self.push(Value.fromInteger(@intCast(i32, arg)));
 
         // Ends program, so we don't call dispatch
     }
 
     fn OP_IMPORT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        const fullpath = ObjString.cast(self.peek(1).obj()).?;
-        const closure = ObjClosure.cast(self.peek(0).obj()).?;
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const fullpath = self.readString(constant);
+        const closure = ObjClosure.cast(self.current_fiber.registers[reg].obj()).?;
 
         if (self.import_registry.get(fullpath)) |globals| {
             for (globals.items) |global| {
-                self.globals.append(global) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                self.globals.append(global) catch @panic("Could not add new global");
             }
         } else {
-            var vm = self.gc.allocator.create(VM) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            var vm = self.gc.allocator.create(VM) catch @panic("Could not create VM");
             // FIXME: give reference to JIT?
-            vm.* = VM.init(self.gc, self.import_registry, self.testing) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            vm.* = VM.init(self.gc, self.import_registry, self.testing) catch @panic("Could not create VM");
             // TODO: how to free this since we copy things to new vm, also fails anyway
             // {
             //     defer vm.deinit();
             //     defer gn.deinit();
             // }
 
-            vm.interpret(closure.function, null) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            vm.interpret(closure.function, null) catch @panic("Could not interpret program");
 
             // Top of stack is how many export we got
             var exported_count: u8 = @intCast(u8, vm.peek(0).integer());
@@ -1557,21 +1548,12 @@ pub const VM = struct {
                 var i: u8 = exported_count;
                 while (i > 0) : (i -= 1) {
                     const global = vm.peek(i);
-                    self.globals.append(global) catch |e| {
-                        panic(e);
-                        unreachable;
-                    };
-                    import_cache.append(global) catch |e| {
-                        panic(e);
-                        unreachable;
-                    };
+                    self.globals.append(global) catch @panic("Could not add new global");
+                    import_cache.append(global) catch @panic("Could not add new global");
                 }
             }
 
-            self.import_registry.put(fullpath, import_cache) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.import_registry.put(fullpath, import_cache) catch @panic("Could not import script");
         }
 
         // Pop path and closure
@@ -1592,7 +1574,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_TRY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_TRY(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         self.currentFrame().?.try_ip = @intCast(usize, arg);
         // We will close scope up to this top if an error is thrown
         self.currentFrame().?.try_top = self.current_fiber.stack_top;
@@ -1611,7 +1593,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_TRY_END(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_TRY_END(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, _: FullArg) void {
         self.currentFrame().?.try_ip = null;
         self.currentFrame().?.try_top = null;
 
@@ -1629,11 +1611,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_THROW(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        self.throw(Error.Custom, self.pop()) catch |e| {
-            panic(e);
-            unreachable;
-        };
+    fn OP_THROW(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        self.throw(Error.Custom, self.current_fiber.registers[reg]) catch @panic("Could not raise error");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1649,16 +1628,16 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LIST(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_LIST(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
         var list: *ObjList = self.gc.allocateObject(
             ObjList,
-            ObjList.init(self.gc.allocator, ObjTypeDef.cast(self.readConstant(arg).obj()).?),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+            ObjList.init(self.gc.allocator, ObjTypeDef.cast(self.readConstant(constant).obj()).?),
+        ) catch @panic("Could not create list");
 
-        self.push(Value.fromObj(list.toObj()));
+        self.current_fiber.registers[reg] = list.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1675,15 +1654,13 @@ pub const VM = struct {
     }
 
     fn OP_LIST_APPEND(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        var list: *ObjList = ObjList.cast(self.peek(1).obj()).?;
-        var list_value: Value = self.peek(0);
+        const item_reg = @intCast(Reg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const list_reg = @intCast(Reg, 0x000000ff & instruction);
 
-        list.rawAppend(self.gc, list_value) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var list: *ObjList = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
+        var list_value: Value = self.current_fiber.registers[item_reg];
 
-        _ = self.pop();
+        list.rawAppend(self.gc, list_value) catch @panic("Could not append item to list");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1699,16 +1676,16 @@ pub const VM = struct {
         );
     }
 
-    fn OP_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
+        const reg = @intCast(Reg, 0x000000ff & instruction);
+
         var map: *ObjMap = self.gc.allocateObject(ObjMap, ObjMap.init(
             self.gc.allocator,
-            ObjTypeDef.cast(self.readConstant(arg).obj()).?,
-        )) catch |e| {
-            panic(e);
-            unreachable;
-        };
+            ObjTypeDef.cast(self.readConstant(constant).obj()).?,
+        )) catch @panic("Could not create map");
 
-        self.push(Value.fromObj(map.toObj()));
+        self.current_fiber.registers[reg] = map.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1725,17 +1702,15 @@ pub const VM = struct {
     }
 
     fn OP_SET_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        var map: *ObjMap = ObjMap.cast(self.peek(2).obj()).?;
-        var key: Value = self.peek(1);
-        var value: Value = self.peek(0);
+        const key_reg = @intCast(Reg, (0x00ff0000 & instruction) >> (@bitSizeOf(Reg) * 2));
+        const value_reg = @intCast(Reg, (0x0000ff00 & instruction) >> @bitSizeOf(Reg));
+        const map_reg = @intCast(Reg, 0x000000ff & instruction);
 
-        map.set(self.gc, key, value) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        const map: *ObjMap = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
+        const key: Value = self.current_fiber.registers[key_reg];
+        const value: Value = self.current_fiber.registers[value_reg];
 
-        _ = self.pop();
-        _ = self.pop();
+        map.set(self.gc, key, value) catch @panic("Could not set map element");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1752,41 +1727,34 @@ pub const VM = struct {
     }
 
     fn OP_GET_LIST_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        var list: *ObjList = ObjList.cast(self.peek(1).obj()).?;
-        const index = self.peek(0).integer();
+        const key_reg = @intCast(Reg, (0x00ff0000 & instruction) >> (@bitSizeOf(Reg) * 2));
+        const value_reg = @intCast(Reg, (0x0000ff00 & instruction) >> @bitSizeOf(Reg));
+        const list_reg = @intCast(Reg, 0x000000ff & instruction);
+
+        const list: *ObjList = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
+        const index = self.current_fiber.registers[key_reg].integer();
 
         if (index < 0) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(
+                Error.OutOfBound,
+                (self.gc.copyString("Out of bound list access.") catch @panic("Could not raise error")).toValue(),
+            ) catch @panic("Could not raise error");
         }
 
         const list_index: usize = @intCast(usize, index);
 
         if (list_index >= list.items.items.len) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(
+                Error.OutOfBound,
+                (self.gc.copyString("Out of bound list access.") catch @panic("Could not raise error")).toValue(),
+            ) catch @panic("Could not raise error");
 
             return;
         }
 
-        var list_item: Value = list.items.items[list_index];
+        const list_item = list.items.items[list_index];
 
-        // Pop list and index
-        _ = self.pop();
-        _ = self.pop();
-
-        // Push value
-        self.push(list_item);
+        self.current_fiber.registers[value_reg] = list_item;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1803,18 +1771,17 @@ pub const VM = struct {
     }
 
     fn OP_GET_MAP_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
-        var map: *ObjMap = ObjMap.cast(self.peek(1).obj()).?;
-        var index: Value = floatToInteger(self.peek(0));
+        const key_reg = @intCast(Reg, (0x00ff0000 & instruction) >> (@bitSizeOf(Reg) * 2));
+        const value_reg = @intCast(Reg, (0x0000ff00 & instruction) >> @bitSizeOf(Reg));
+        const map_reg = @intCast(Reg, 0x000000ff & instruction);
 
-        // Pop map and key
-        _ = self.pop();
-        _ = self.pop();
+        const map: *ObjMap = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
+        const index: Value = floatToInteger(self.current_fiber.registers[key_reg]);
 
         if (map.map.get(index)) |value| {
-            // Push value
-            self.push(value);
+            self.current_fiber.registers[value_reg] = value;
         } else {
-            self.push(Value.Null);
+            self.current_fiber.registers[value_reg] = Value.Null;
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2052,7 +2019,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_ENUM_CASE_VALUE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_ENUM_CASE_VALUE(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, _: FullArg) void {
         var enum_case: *ObjEnumInstance = ObjEnumInstance.cast(self.peek(0).obj()).?;
 
         _ = self.pop();
@@ -2250,7 +2217,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_OBJECT_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_GET_OBJECT_PROPERTY(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         const object: *ObjObject = ObjObject.cast(self.peek(0).obj()).?;
         const name: *ObjString = self.readString(arg);
 
@@ -3082,7 +3049,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_JUMP_IF_NOT_NULL(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_JUMP_IF_NOT_NULL(self: *Self, current_frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         if (!self.peek(0).isNull()) {
             current_frame.ip += arg;
         }
@@ -3269,16 +3236,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_UNWRAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_UNWRAP(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, _: FullArg) void {
         if (self.peek(0).isNull()) {
             // TODO: Should we throw or @panic?
-            self.throw(Error.UnwrappedNull, (self.gc.copyString("Force unwrapped optional is null") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(
+                Error.UnwrappedNull,
+                (self.gc.copyString("Force unwrapped optional is null") catch @panic("Could not raise error")).toValue(),
+            ) catch @panic("Could not raise error");
         }
 
         const next_full_instruction = self.readInstruction();
