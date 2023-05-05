@@ -1973,7 +1973,7 @@ pub const Parser = struct {
 
         try self.consume(.LeftParen, "Expected `(` after `while`.");
 
-        var condition = try self.expression(false);
+        const condition = try self.expression(false);
 
         try self.consume(.RightParen, "Expected `)` after `while` condition.");
 

@@ -65,13 +65,10 @@ pub const CodeGen = struct {
             .gc = gc,
             .parser = parser,
             .testing = testing,
-            .registers = std.ArrayList(bool).init(gc.allocator),
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.registers.deinit();
-    }
+    pub fn deinit(_: *Self) void {}
 
     pub fn pushRegister(self: *Self) u8 {
         self.register_top += 1;
@@ -122,18 +119,13 @@ pub const CodeGen = struct {
         try self.current.?.function.?.chunk.write(code, location.line);
     }
 
-    pub fn emitTwo(self: *Self, location: Token, a: u8, b: FullArg) !void {
-        try self.emit(location, (@intCast(Instruction, a) << @bitSizeOf(FullArg)) | @intCast(Instruction, b));
+    pub fn emitTwo(self: *Self, location: Token, a: u16, b: u16) !void {
+        try self.emit(location, (@intCast(Instruction, a) << 16) | @intCast(Instruction, b));
     }
 
     // OP_ | arg
     pub fn emitCodeArg(self: *Self, location: Token, code: OpCode, arg: FullArg) !void {
         try self.emit(location, (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | @intCast(Instruction, arg));
-    }
-
-    // OP_ | a | b
-    pub fn emitCodeArgs(self: *Self, location: Token, code: OpCode, a: u8, b: Arg) !void {
-        try self.emit(location, (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, a) << @bitSizeOf(Arg)) | (@intCast(Instruction, b)));
     }
 
     pub fn emitOpCode(self: *Self, location: Token, code: OpCode) !void {
@@ -152,7 +144,9 @@ pub const CodeGen = struct {
     pub fn emitCodeArgReg(self: *Self, location: Token, code: OpCode, arg: Arg, register: Reg) !void {
         try self.emit(
             location,
-            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, arg) << @bitSizeOf(Arg)) | @intCast(Instruction, register),
+            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) |
+                (@intCast(Instruction, arg) << @bitSizeOf(Reg)) |
+                @intCast(Instruction, register),
         );
     }
 
@@ -160,51 +154,72 @@ pub const CodeGen = struct {
     pub fn emitCodeArgRegs(self: *Self, location: Token, code: OpCode, arg: u9, register: Reg, dest_register: Reg) !void {
         try self.emit(
             location,
-            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, arg) << @bitSizeOf(Arg)) | @intCast(Instruction, register) << @bitSizeOf(Reg) | @intCast(Instruction, dest_register),
+            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) |
+                (@intCast(Instruction, arg) << @bitSizeOf(Reg) * 2) |
+                @intCast(Instruction, register) << @bitSizeOf(Reg) |
+                @intCast(Instruction, dest_register),
         );
+    }
+
+    // OP_ | full_arg | register
+    // register
+    pub fn emitCodeFullArgRegs(self: *Self, location: Token, code: OpCode, arg: FullArg, register: Reg, dest_register: Reg) !void {
+        try self.emitCodeRegReg(location, code, register, dest_register);
+        try self.emit(location, arg);
     }
 
     // OP_ | a | b | register
     pub fn emitCodeArgsReg(self: *Self, location: Token, code: OpCode, a: u8, b: u9, register: Reg) !void {
         try self.emit(
             location,
-            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, a) << @bitSizeOf(Arg)) | (@intCast(Instruction, b) << @bitSizeOf(Reg)) | @intCast(Instruction, register),
+            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) |
+                (@intCast(Instruction, a) << @bitSizeOf(Arg)) |
+                (@intCast(Instruction, b) << @bitSizeOf(Reg)) |
+                @intCast(Instruction, register),
         );
     }
 
     // OP_ | register | register
-    pub fn emitCodeRegReg(self: *Self, location: Token, code: OpCode, register: Reg, dest: u8) !void {
+    pub fn emitCodeRegReg(self: *Self, location: Token, code: OpCode, register: Reg, dest: Reg) !void {
         try self.emit(
             location,
-            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, register) << @bitSizeOf(Arg)) | @intCast(Instruction, dest),
+            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) |
+                (@intCast(Instruction, register) << @bitSizeOf(Reg)) |
+                @intCast(Instruction, dest),
         );
     }
 
     // OP_ | register | register | register
-    pub fn emitCodeRegs(self: *Self, location: Token, code: OpCode, reg1: u8, reg2: u8, dest: u8) !void {
+    pub fn emitCodeRegs(self: *Self, location: Token, code: OpCode, reg1: Reg, reg2: Reg, dest: Reg) !void {
         try self.emit(
             location,
-            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) | (@intCast(Instruction, reg1) << @bitSizeOf(Arg)) | (@intCast(Instruction, reg2) << @bitSizeOf(Reg)) | @intCast(Instruction, dest),
+            (@intCast(Instruction, @enumToInt(code)) << @bitSizeOf(FullArg)) |
+                (@intCast(Instruction, reg1) << @bitSizeOf(Reg) * 2) |
+                (@intCast(Instruction, reg2) << @bitSizeOf(Reg)) |
+                @intCast(Instruction, dest),
         );
     }
 
     pub fn emitLoop(self: *Self, location: Token, loop_start: usize) !void {
         const offset: usize = self.currentCode() - loop_start + 1;
-        if (offset > 16777215) {
+        if (offset > std.math.maxInt(FullArg)) {
             try self.reportError("Loop body too large.");
         }
 
         try self.emitCodeArg(location, .OP_LOOP, @intCast(FullArg, offset));
     }
 
-    pub fn emitJump(self: *Self, location: Token, instruction: OpCode, cond_register: ?u8) !usize {
+    pub fn emitJump(self: *Self, location: Token, instruction: OpCode, cond_register: ?Reg) !usize {
         if (cond_register) |cond| {
-            try self.emitCodeArgReg(location, instruction, 0xffffff, cond);
-        } else {
-            try self.emitCodeArg(location, instruction, 0xffffff);
-        }
+            try self.emitCodeArg(location, instruction, std.math.maxInt(FullArg));
+            try self.emit(location, cond);
 
-        return self.currentCode() - 1;
+            return self.currentCode() - 2;
+        } else {
+            try self.emitCodeArg(location, instruction, std.math.maxInt(FullArg));
+
+            return self.currentCode() - 1;
+        }
     }
 
     pub fn patchJumpOrLoop(self: *Self, offset: usize, loop_start: ?usize) !void {
@@ -222,34 +237,28 @@ pub const CodeGen = struct {
             self.current.?.function.?.chunk.code.items[offset] =
                 (@intCast(Instruction, instruction) << @bitSizeOf(FullArg)) | @intCast(Instruction, loop_offset);
         } else { // Patching a break statement
-            try self.patchJump(offset);
+            try self.patchJump(offset, false);
         }
     }
 
-    pub fn patchJump(self: *Self, offset: usize) !void {
+    pub fn patchJump(self: *Self, offset: usize, conditional: bool) !void {
         assert(offset < self.currentCode());
 
-        const jump: usize = self.currentCode() - offset - 1;
+        var delta: usize = 1;
+        if (conditional) {
+            delta = 2;
+        }
+        const jump: usize = self.currentCode() - offset - delta;
 
-        if (jump > 16777215) {
+        if (jump > std.math.maxInt(FullArg)) {
             try self.reportError("Jump too large.");
         }
 
         const original = self.current.?.function.?.chunk.code.items[offset];
-        const instruction: u8 = @intCast(u8, original >> 25);
-        // OP 7bits | Arg 17bit | Reg 8bit
-        const cond_register = switch (instruction) {
-            .OP_JUMP_IF_FALSE, .OP_JUMP_IF_NOT_NULL => @intCast(@bitSizeOf(Reg), 0x0000000f & original),
-            else => null,
-        };
+        const instruction = @intCast(Reg, original >> @bitSizeOf(FullArg));
 
-        if (cond_register) |cond| {
-            self.current.?.function.?.chunk.code.items[offset] =
-                (@intCast(Instruction, instruction) << @bitSizeOf(FullArg)) | @intCast(Instruction, jump) << @bitSizeOf(Arg) | @intCast(Instruction, cond);
-        } else {
-            self.current.?.function.?.chunk.code.items[offset] =
-                (@intCast(Instruction, instruction) << @bitSizeOf(FullArg)) | @intCast(Instruction, jump);
-        }
+        self.current.?.function.?.chunk.code.items[offset] =
+            (@intCast(Instruction, instruction) << @bitSizeOf(FullArg)) | @intCast(Instruction, jump);
     }
 
     pub fn patchTry(self: *Self, offset: usize) !void {
@@ -412,7 +421,7 @@ pub const CodeGen = struct {
         try self.emitCodeArgReg(location, .OP_CONSTANT, @intCast(Arg, constant), register);
     }
 
-    pub inline fn OP_GET_LOCAL(self: *Self, location: Token, slot: FullArg, dest_register: Reg) !void {
+    pub inline fn OP_GET_LOCAL(self: *Self, location: Token, slot: Arg, dest_register: Reg) !void {
         try self.emitCodeArgReg(location, .OP_GET_LOCAL, slot, dest_register);
     }
 
@@ -420,7 +429,7 @@ pub const CodeGen = struct {
         try self.emitCodeArgReg(location, .OP_SET_LOCAL, slot, value_register);
     }
 
-    pub inline fn OP_GET_GLOBAL(self: *Self, location: Token, slot: FullArg, dest_register: Reg) !void {
+    pub inline fn OP_GET_GLOBAL(self: *Self, location: Token, slot: Arg, dest_register: Reg) !void {
         try self.emitCodeArgReg(location, .OP_GET_GLOBAL, slot, dest_register);
     }
 
@@ -469,7 +478,7 @@ pub const CodeGen = struct {
     }
 
     pub inline fn OP_MAP(self: *Self, location: Token, constant: Arg, dest_register: Reg) !void {
-        try self.emitCodeArg(location, .OP_MAP, constant, dest_register);
+        try self.emitCodeArgReg(location, .OP_MAP, constant, dest_register);
     }
 
     pub inline fn OP_SET_MAP(self: *Self, location: Token, key_register: Reg, value_register: Reg, map_register: Reg) !void {
@@ -492,8 +501,8 @@ pub const CodeGen = struct {
         try self.emitCodeRegReg(location, .OP_BNOT, value_register, dest_register);
     }
 
-    pub inline fn OP_UNWRAP(self: *Self, location: Token, dest_register: Reg) !void {
-        try self.emitCodeReg(location, .OP_UNWRAP, dest_register);
+    pub inline fn OP_UNWRAP(self: *Self, location: Token, value_register: Reg) !void {
+        try self.emitCodeReg(location, .OP_UNWRAP, value_register);
     }
 
     pub inline fn OP_IS(self: *Self, location: Token, operand_register: Reg, constant_register: Reg, dest_register: Reg) !void {
@@ -556,8 +565,12 @@ pub const CodeGen = struct {
         try self.emitCodeReg(location, .OP_PUSH, value_register);
     }
 
+    pub inline fn OP_POP(self: *Self, location: Token, dest_register: Reg) !void {
+        try self.emitCodeReg(location, .OP_POP, dest_register);
+    }
+
     pub inline fn OP_CLOSURE(self: *Self, location: Token, constant: Arg, dest_register: Reg) !void {
-        try self.emitCodeArg(location, .OP_CLOSURE, constant, dest_register);
+        try self.emitCodeArgReg(location, .OP_CLOSURE, constant, dest_register);
     }
 
     pub inline fn OP_YIELD(self: *Self, location: Token, expr_register: Reg) !void {
@@ -568,8 +581,8 @@ pub const CodeGen = struct {
         try self.emitCodeReg(location, .OP_RESOLVE, fiber_register);
     }
 
-    pub inline fn OP_RESUME(self: *Self, location: Token, fiber_register: Reg) !void {
-        try self.emitCodeReg(location, .OP_RESUME, fiber_register);
+    pub inline fn OP_RESUME(self: *Self, location: Token, fiber_register: Reg, yield_register: Reg) !void {
+        try self.emitCodeRegReg(location, .OP_RESUME, fiber_register, yield_register);
     }
 
     pub inline fn OP_GET_ENUM_CASE_FROM_VALUE(self: *Self, location: Token, enum_register: Reg, value_register: Reg, dest_register: Reg) !void {
@@ -593,32 +606,31 @@ pub const CodeGen = struct {
     }
 
     pub inline fn OP_ENUM(self: *Self, location: Token, constant: Arg, dest_register: Reg) !void {
-        try self.emitCodeArg(location, .OP_ENUM, constant, dest_register);
+        try self.emitCodeArgReg(location, .OP_ENUM, constant, dest_register);
     }
 
     pub inline fn OP_ENUM_CASE(self: *Self, location: Token, enum_register: Reg, value_register: Reg) !void {
         try self.emitCodeRegReg(location, .OP_ENUM_CASE, enum_register, value_register);
     }
 
-    pub inline fn OP_GET_ENUM_CASE(self: *Self, location: Token, index: FullArg, enum_register: Reg) !void {
-        try self.emitCodeArgReg(location, .OP_GET_ENUM_CASE, index, enum_register);
+    pub inline fn OP_GET_ENUM_CASE(self: *Self, location: Token, index: u9, enum_register: Reg, dest_register: Reg) !void {
+        try self.emitCodeArgRegs(location, .OP_GET_ENUM_CASE, index, enum_register, dest_register);
     }
 
-    pub inline fn OP_GET_ENUM_CASE_VALUE(self: *Self, location: Token, enum_register: Reg) !void {
-        try self.emitCodeReg(location, .OP_GET_ENUM_CASE_VALUE, enum_register);
+    pub inline fn OP_GET_ENUM_CASE_VALUE(self: *Self, location: Token, enum_instance_register: Reg, dest_register: Reg) !void {
+        try self.emitCodeRegReg(location, .OP_GET_ENUM_CASE_VALUE, enum_instance_register, dest_register);
     }
 
     pub inline fn OP_THROW(self: *Self, location: Token, error_register: Reg) !void {
         try self.emitCodeReg(location, .OP_THROW, error_register);
     }
 
-    pub inline fn OP_INSTANCE(self: *Self, location: Token, dest_register: Reg) !void {
-        try self.emitCodeReg(location, .OP_INSTANCE, dest_register);
+    pub inline fn OP_INSTANCE(self: *Self, location: Token, object_register: Reg, dest_register: Reg) !void {
+        try self.emitCodeRegReg(location, .OP_INSTANCE, object_register, dest_register);
     }
 
     pub inline fn OP_SET_INSTANCE_PROPERTY(self: *Self, location: Token, instance_register: Reg, field_constant: Arg, value_register: Reg) !void {
-        try self.emitCodeArgReg(location, .OP_SET_INSTANCE_PROPERTY, @intCast(Arg, field_constant), instance_register);
-        try self.emit(location, @intCast(Instruction, value_register));
+        try self.emitCodeFullArgRegs(location, .OP_SET_INSTANCE_PROPERTY, field_constant, instance_register, value_register);
     }
 
     pub inline fn OP_OBJECT(self: *Self, location: Token, name_constant: Arg, type_constant: Arg, dest_register: Reg) !void {
@@ -628,17 +640,16 @@ pub const CodeGen = struct {
 
     pub inline fn OP_PROPERTY(self: *Self, location: Token, object_register: Reg, member_name_constant: Arg, value_register: Reg) !void {
         try self.emitCodeArgReg(location, .OP_PROPERTY, member_name_constant, object_register);
-        try self.emit(@intCast(Instruction, value_register));
+        try self.emit(location, @intCast(Instruction, value_register));
     }
 
     pub inline fn OP_METHOD(self: *Self, location: Token, object_register: Reg, member_name_constant: Arg, value_register: Reg) !void {
         try self.emitCodeArgReg(location, .OP_METHOD, member_name_constant, object_register);
-        try self.emit(@intCast(Instruction, value_register));
+        try self.emit(location, @intCast(Instruction, value_register));
     }
 
     pub inline fn OP_SET_OBJECT_PROPERTY(self: *Self, location: Token, object_register: Reg, member_name_constant: Arg, value_register: Reg) !void {
-        try self.emitCodeArgReg(location, .OP_METHOD, member_name_constant, object_register);
-        try self.emit(@intCast(Instruction, value_register));
+        try self.emitCodeFullArgRegs(location, .OP_SET_OBJECT_PROPERTY, member_name_constant, object_register, value_register);
     }
 
     pub inline fn OP_IMPORT(self: *Self, location: Token, path_constant: Arg, function_register: Reg) !void {
