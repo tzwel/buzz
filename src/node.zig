@@ -2043,7 +2043,7 @@ pub const UnaryNode = struct {
                     try codegen.reportErrorFmt(
                         self.left.location,
                         "Expected type `int`, got `{s}`",
-                        .{try left_type.toStringAlloc(codegen.gc.allocator)},
+                        .{(try left_type.toStringAlloc(codegen.gc.allocator)).items},
                     );
                 }
 
@@ -2058,7 +2058,7 @@ pub const UnaryNode = struct {
                     try codegen.reportErrorFmt(
                         self.left.location,
                         "Expected type `bool`, got `{s}`",
-                        .{try left_type.toStringAlloc(codegen.gc.allocator)},
+                        .{(try left_type.toStringAlloc(codegen.gc.allocator)).items},
                     );
                 }
 
@@ -2073,7 +2073,7 @@ pub const UnaryNode = struct {
                     try codegen.reportErrorFmt(
                         self.left.location,
                         "Expected type `int` or `float`, got `{s}`",
-                        .{try left_type.toStringAlloc(codegen.gc.allocator)},
+                        .{(try left_type.toStringAlloc(codegen.gc.allocator)).items},
                     );
                 }
 
@@ -3166,9 +3166,9 @@ pub const TryNode = struct {
         while (it.next()) |kv| {
             if (self.unconditional_clause == null and self.clauses.get(try kv.key_ptr.*.toParentType(codegen.gc.allocator, &codegen.gc.type_registry)) == null) {
                 const err_str = try kv.key_ptr.*.toStringAlloc(codegen.gc.allocator);
-                defer codegen.gc.allocator.free(err_str);
+                defer err_str.deinit();
 
-                try codegen.reportErrorFmt(node.location, "Error type `{s}` not handled", .{err_str});
+                try codegen.reportErrorFmt(node.location, "Error type `{s}` not handled", .{err_str.items});
             }
         }
 
@@ -4258,9 +4258,9 @@ pub const CallNode = struct {
 
                 for (not_handled.items) |error_type| {
                     const error_str = try error_type.toStringAlloc(codegen.gc.allocator);
-                    defer codegen.gc.allocator.free(error_str);
+                    defer error_str.deinit();
 
-                    try codegen.reportErrorFmt(node.location, "Error `{s}` is not handled", .{error_str});
+                    try codegen.reportErrorFmt(node.location, "Error `{s}` is not handled", .{error_str.items});
                 }
             }
         }
@@ -4962,9 +4962,9 @@ pub const ThrowNode = struct {
                     } else {
                         // Not in a try-catch and function signature does not expect this error type
                         const error_str = try self.error_value.type_def.?.toStringAlloc(codegen.gc.allocator);
-                        defer codegen.gc.allocator.free(error_str);
+                        defer error_str.deinit();
 
-                        try codegen.reportErrorFmt(node.location, "Error type `{s}` not expected", .{error_str});
+                        try codegen.reportErrorFmt(node.location, "Error type `{s}` not expected", .{error_str.items});
                     }
                 }
             }
@@ -6943,7 +6943,7 @@ pub const ObjectDeclarationNode = struct {
                             "Object declared as conforming to protocol `{s}` but doesn't implement method `{s}`",
                             .{
                                 protocol_def.name.string,
-                                try mkv.value_ptr.*.toStringAlloc(codegen.gc.allocator),
+                                (try mkv.value_ptr.*.toStringAlloc(codegen.gc.allocator)).items,
                             },
                         );
                     }

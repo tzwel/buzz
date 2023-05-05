@@ -3323,8 +3323,8 @@ pub const VM = struct {
                 }
 
                 const value_str = try valueToStringAlloc(self.gc.allocator, processed_payload);
-                defer self.gc.allocator.free(value_str);
-                std.debug.print("\n\u{001b}[31mError: {s}\u{001b}[0m\n", .{value_str});
+                defer value_str.deinit();
+                std.debug.print("\n\u{001b}[31mError: {s}\u{001b}[0m\n", .{value_str.items});
 
                 for (stack.items) |stack_frame| {
                     std.debug.print(
