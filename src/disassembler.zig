@@ -236,7 +236,7 @@ pub fn dumpRegisters(vm: *VM) void {
     print("\u{001b}[2m", .{}); // Dimmed
     print("registers>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n", .{});
 
-    for (vm.current_fiber.registers, 0..) |value, i| {
+    for (vm.currentFrame().?.registers, 0..) |value, i| {
         // FIXME: We don't know if its the end of meaningful registers
         if (value.val == _value.Value.Void.val) {
             break;

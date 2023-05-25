@@ -82,6 +82,8 @@ pub const CallFrame = struct {
 
     // In which register to put the function result
     result_register: ?Reg,
+
+    registers: [255]Value,
 };
 
 pub const TryCtx = extern struct {
@@ -116,7 +118,6 @@ pub const Fiber = struct {
     frames: std.ArrayList(CallFrame),
     frame_count: u64 = 0,
 
-    registers: [255]Value,
     stack: []Value,
     stack_top: [*]Value,
     open_upvalues: ?*ObjUpValue,
@@ -145,7 +146,6 @@ pub const Fiber = struct {
         var self: Self = .{
             .allocator = allocator,
             .parent_fiber = parent_fiber,
-            .registers = [_]Value{Value.Void} ** 255,
             .stack = try allocator.alloc(Value, 100000),
             .stack_top = undefined,
             .frames = std.ArrayList(CallFrame).init(allocator),
@@ -216,7 +216,7 @@ pub const Fiber = struct {
         vm.current_fiber = self.parent_fiber.?;
 
         if (self.parent_fiber) |parent_fiber| {
-            parent_fiber.registers[parent_fiber.yield_register.?] = yielded_value;
+            parent_fiber.currentFrame().?.registers[parent_fiber.yield_register.?] = yielded_value;
             parent_fiber.yield_register = null;
         }
 
@@ -274,13 +274,13 @@ pub const Fiber = struct {
                 vm.current_fiber = self;
 
                 const result = if (vm.currentFrame().?.result_register) |result_register|
-                    vm.current_fiber.registers[result_register]
+                    vm.currentFrame().?.registers[result_register]
                 else
                     vm.pop();
 
                 vm.current_fiber = parent_fiber;
                 if (vm.current_fiber.resolve_register) |resolve_register| {
-                    vm.current_fiber.registers[resolve_register] = result;
+                    vm.currentFrame().?.registers[resolve_register] = result;
                     vm.current_fiber.resolve_register = null;
                 } else {
                     vm.push(result);
@@ -299,7 +299,7 @@ pub const Fiber = struct {
 
         // Put the result back stack so `resolve` can pick it up
         if (vm.current_fiber.resolve_register) |resolve_register| {
-            vm.current_fiber.registers[resolve_register] = result;
+            vm.currentFrame().?.registers[resolve_register] = result;
         } else {
             vm.push(result);
         }
@@ -308,7 +308,7 @@ pub const Fiber = struct {
         vm.current_fiber = self.parent_fiber.?;
 
         if (vm.current_fiber.resolve_register) |resolve_register| {
-            vm.current_fiber.registers[resolve_register] = if (resolved)
+            vm.currentFrame().?.registers[resolve_register] = if (resolved)
                 result // We did `resolve fiber` we want the returned value
             else
                 Value.Null; // We did `resume fiber` and hit return, we don't yet care about that value
@@ -332,6 +332,14 @@ pub const Fiber = struct {
                 else => {},
             }
         }
+    }
+
+    pub inline fn currentFrame(self: *Self) ?*CallFrame {
+        if (self.frame_count == 0) {
+            return null;
+        }
+
+        return &self.frames.items[self.frame_count - 1];
     }
 };
 
@@ -742,6 +750,8 @@ pub const VM = struct {
                     full_instruction,
                 },
             );
+            dumpStack(self);
+            dumpRegisters(self);
         }
 
         // We're at the start of catch clauses because an error was thrown
@@ -776,8 +786,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_PUSH(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.push(self.current_fiber.registers[reg]);
+    fn OP_PUSH(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        self.push(frame.registers[reg]);
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -793,8 +803,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_NULL(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.registers[reg] = Value.Null;
+    fn OP_NULL(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        frame.registers[reg] = Value.Null;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -810,8 +820,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_VOID(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.registers[reg] = Value.Void;
+    fn OP_VOID(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        frame.registers[reg] = Value.Void;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -827,8 +837,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_TRUE(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.registers[reg] = Value.True;
+    fn OP_TRUE(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        frame.registers[reg] = Value.True;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -844,8 +854,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_FALSE(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.registers[reg] = Value.False;
+    fn OP_FALSE(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        frame.registers[reg] = Value.False;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -861,8 +871,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_POP(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.registers[reg] = self.pop();
+    fn OP_POP(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        frame.registers[reg] = self.pop();
 
         const next_full_instruction: Instruction = self.readInstruction();
         @call(
@@ -878,14 +888,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_DEFINE_GLOBAL(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_DEFINE_GLOBAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
         self.globals.ensureTotalCapacity(slot + 1) catch @panic("Could not create new global");
         self.globals.expandToCapacity();
-        self.globals.items[slot] = self.current_fiber.registers[reg];
+        self.globals.items[slot] = frame.registers[reg];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -901,12 +911,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_GLOBAL(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_GLOBAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        self.current_fiber.registers[reg] = self.currentGlobals().items[slot];
+        frame.registers[reg] = self.currentGlobals().items[slot];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -922,12 +932,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_GLOBAL(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_GLOBAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        self.currentGlobals().items[slot] = self.current_fiber.registers[reg];
+        self.currentGlobals().items[slot] = frame.registers[reg];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -943,12 +953,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_LOCAL(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_LOCAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        self.current_fiber.registers[reg] = current_frame.slots[slot];
+        frame.registers[reg] = frame.slots[slot];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -964,12 +974,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_LOCAL(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_LOCAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        current_frame.slots[slot] = self.current_fiber.registers[reg];
+        frame.slots[slot] = frame.registers[reg];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -985,12 +995,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_UPVALUE(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_UPVALUE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        self.current_fiber.registers[reg] = current_frame.closure.upvalues.items[slot].location.*;
+        frame.registers[reg] = frame.closure.upvalues.items[slot].location.*;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1006,12 +1016,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_UPVALUE(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_UPVALUE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const slot = args.arg;
         const reg = args.reg;
 
-        current_frame.closure.upvalues.items[slot].location.* = self.current_fiber.registers[reg];
+        frame.closure.upvalues.items[slot].location.* = frame.registers[reg];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1027,12 +1037,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_CONSTANT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_CONSTANT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const reg = args.reg;
 
-        self.current_fiber.registers[reg] = self.readConstant(constant);
+        frame.registers[reg] = self.readConstant(constant);
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1048,18 +1058,18 @@ pub const VM = struct {
         );
     }
 
-    fn OP_TO_STRING(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_TO_STRING(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const value_reg = args.reg;
         const dest_reg = args.dest_reg;
 
         const str = valueToStringAlloc(
             self.gc.allocator,
-            self.current_fiber.registers[value_reg],
+            frame.registers[value_reg],
         ) catch @panic("Could not create new string");
         defer str.deinit();
 
-        self.current_fiber.registers[dest_reg] = Value.fromObj(
+        frame.registers[dest_reg] = Value.fromObj(
             (self.gc.copyString(str.items) catch @panic("Could not copy string")).toObj(),
         );
 
@@ -1077,14 +1087,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_NEGATE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_NEGATE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const value_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const value = self.current_fiber.registers[value_reg];
+        const value = frame.registers[value_reg];
 
-        self.current_fiber.registers[dest_reg] = if (value.isInteger())
+        frame.registers[dest_reg] = if (value.isInteger())
             Value.fromInteger(-value.integer())
         else
             Value.fromFloat(-value.float());
@@ -1103,7 +1113,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_CLOSURE(self: *Self, current_frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_CLOSURE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const reg = args.reg;
@@ -1114,7 +1124,7 @@ pub const VM = struct {
             ObjClosure.init(self.gc.allocator, self, function) catch @panic("Could not create closure"),
         ) catch @panic("Could not create closure");
 
-        self.current_fiber.registers[reg] = closure.toValue();
+        frame.registers[reg] = closure.toValue();
 
         var i: usize = 0;
         while (i < function.upvalue_count) : (i += 1) {
@@ -1123,10 +1133,10 @@ pub const VM = struct {
 
             if (is_local) {
                 closure.upvalues.append(
-                    self.captureUpvalue(&(current_frame.slots[index])) catch @panic("Could not capture upvalue"),
+                    self.captureUpvalue(&(frame.slots[index])) catch @panic("Could not capture upvalue"),
                 ) catch @panic("Could not capture upvalue");
             } else {
-                closure.upvalues.append(current_frame.closure.upvalues.items[index]) catch @panic("Could not add new upvalue");
+                closure.upvalues.append(frame.closure.upvalues.items[index]) catch @panic("Could not add new upvalue");
             }
         }
 
@@ -1162,7 +1172,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ROUTINE(self: *Self, _: *CallFrame, instruction: u32, code: OpCode, _: FullArg) void {
+    fn OP_ROUTINE(self: *Self, frame: *CallFrame, instruction: u32, code: OpCode, _: FullArg) void {
         const args = getCodeArgsReg(instruction);
         const arg_count = args.a;
         const catch_count = args.b;
@@ -1194,7 +1204,7 @@ pub const VM = struct {
             .type_def = type_def,
         }) catch @panic("Could not create fiber");
 
-        self.current_fiber.registers[reg] = obj_fiber.toValue();
+        frame.registers[reg] = obj_fiber.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1258,10 +1268,10 @@ pub const VM = struct {
         );
     }
 
-    fn OP_RESUME(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_RESUME(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
 
-        ObjFiber.cast(self.current_fiber.registers[args.reg].obj()).?.fiber.resume_(
+        ObjFiber.cast(frame.registers[args.reg].obj()).?.fiber.resume_(
             self,
             args.dest_reg,
             null,
@@ -1281,10 +1291,10 @@ pub const VM = struct {
         );
     }
 
-    fn OP_RESOLVE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_RESOLVE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
 
-        ObjFiber.cast(self.current_fiber.registers[args.reg].obj()).?.fiber.resolve_(
+        ObjFiber.cast(frame.registers[args.reg].obj()).?.fiber.resolve_(
             self,
             args.dest_reg,
         ) catch @panic("Could not resolve fiber");
@@ -1303,8 +1313,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_YIELD(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.current_fiber.yield(self, self.current_fiber.registers[reg]);
+    fn OP_YIELD(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        self.current_fiber.yield(self, frame.registers[reg]);
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1589,7 +1599,7 @@ pub const VM = struct {
 
     // result_count > 0 when the return is `export`
     inline fn returnFrame(self: *Self, value_register: Reg) bool {
-        const result = self.current_fiber.registers[value_register];
+        const result = self.currentFrame().?.registers[value_register];
 
         const frame: *CallFrame = self.currentFrame().?;
 
@@ -1617,7 +1627,7 @@ pub const VM = struct {
         self.current_fiber.stack_top = frame.slots;
 
         if (frame.result_register) |result_register| {
-            self.current_fiber.registers[result_register] = result;
+            self.currentFrame().?.registers[result_register] = result;
         } else {
             self.push(result);
         }
@@ -1650,12 +1660,12 @@ pub const VM = struct {
         // Ends program, so we don't call dispatch
     }
 
-    fn OP_IMPORT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_IMPORT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const constant = @intCast(Arg, (0x01ffffff & instruction) >> @bitSizeOf(Reg));
         const reg = @intCast(Reg, 0x000000ff & instruction);
 
         const fullpath = self.readString(constant);
-        const closure = ObjClosure.cast(self.current_fiber.registers[reg].obj()).?;
+        const closure = ObjClosure.cast(frame.registers[reg].obj()).?;
 
         if (self.import_registry.get(fullpath)) |globals| {
             for (globals.items) |global| {
@@ -1745,8 +1755,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_THROW(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
-        self.throw(Error.Custom, self.current_fiber.registers[reg]) catch @panic("Could not raise error");
+    fn OP_THROW(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
+        self.throw(Error.Custom, frame.registers[reg]) catch @panic("Could not raise error");
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1762,7 +1772,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LIST(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_LIST(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const reg = args.reg;
@@ -1772,7 +1782,7 @@ pub const VM = struct {
             ObjList.init(self.gc.allocator, ObjTypeDef.cast(self.readConstant(constant).obj()).?),
         ) catch @panic("Could not create list");
 
-        self.current_fiber.registers[reg] = list.toValue();
+        frame.registers[reg] = list.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1788,13 +1798,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LIST_APPEND(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_LIST_APPEND(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const item_reg = args.reg;
         const list_reg = args.dest_reg;
 
-        var list: *ObjList = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
-        var list_value: Value = self.current_fiber.registers[item_reg];
+        var list: *ObjList = ObjList.cast(frame.registers[list_reg].obj()).?;
+        var list_value: Value = frame.registers[item_reg];
 
         list.rawAppend(self.gc, list_value) catch @panic("Could not append item to list");
 
@@ -1812,7 +1822,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_MAP(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const reg = args.reg;
@@ -1822,7 +1832,7 @@ pub const VM = struct {
             ObjTypeDef.cast(self.readConstant(constant).obj()).?,
         )) catch @panic("Could not create map");
 
-        self.current_fiber.registers[reg] = map.toValue();
+        frame.registers[reg] = map.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1838,15 +1848,15 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_MAP(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const key_reg = args.reg1;
         const value_reg = args.reg2;
         const map_reg = args.reg3;
 
-        const map: *ObjMap = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
-        const key: Value = self.current_fiber.registers[key_reg];
-        const value: Value = self.current_fiber.registers[value_reg];
+        const map: *ObjMap = ObjMap.cast(frame.registers[map_reg].obj()).?;
+        const key: Value = frame.registers[key_reg];
+        const value: Value = frame.registers[value_reg];
 
         map.set(self.gc, key, value) catch @panic("Could not set map element");
 
@@ -1864,14 +1874,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_LIST_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_LIST_SUBSCRIPT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const list_reg = args.reg1;
         const key_reg = args.reg2;
         const dest_reg = args.reg3;
 
-        const list: *ObjList = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
-        const index = self.current_fiber.registers[key_reg].integer();
+        const list: *ObjList = ObjList.cast(frame.registers[list_reg].obj()).?;
+        const index = frame.registers[key_reg].integer();
 
         if (index < 0) {
             self.throw(
@@ -1893,7 +1903,7 @@ pub const VM = struct {
 
         const list_item = list.items.items[list_index];
 
-        self.current_fiber.registers[dest_reg] = list_item;
+        frame.registers[dest_reg] = list_item;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -1909,19 +1919,19 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_MAP_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_MAP_SUBSCRIPT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const map_reg = args.reg1;
         const key_reg = args.reg2;
         const dest_reg = args.reg3;
 
-        const map: *ObjMap = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
-        const index: Value = floatToInteger(self.current_fiber.registers[key_reg]);
+        const map: *ObjMap = ObjMap.cast(frame.registers[map_reg].obj()).?;
+        const index: Value = floatToInteger(frame.registers[key_reg]);
 
         if (map.map.get(index)) |value| {
-            self.current_fiber.registers[dest_reg] = value;
+            frame.registers[dest_reg] = value;
         } else {
-            self.current_fiber.registers[dest_reg] = Value.Null;
+            frame.registers[dest_reg] = Value.Null;
         }
 
         const next_full_instruction = self.readInstruction();
@@ -1938,14 +1948,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_STRING_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_STRING_SUBSCRIPT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const subscript_reg = args.reg1;
         const key_reg = args.reg2;
         const dest_reg = args.reg3;
 
-        const str = ObjString.cast(self.current_fiber.registers[subscript_reg].obj()).?;
-        const index = self.current_fiber.registers[key_reg].integer();
+        const str = ObjString.cast(frame.registers[subscript_reg].obj()).?;
+        const index = frame.registers[key_reg].integer();
 
         if (index < 0) {
             self.throw(
@@ -1959,7 +1969,7 @@ pub const VM = struct {
         if (str_index < str.string.len) {
             const str_item: Value = (self.gc.copyString(&([_]u8{str.string[str_index]})) catch @panic("Could not subscript string")).toValue();
 
-            self.current_fiber.registers[dest_reg] = str_item;
+            frame.registers[dest_reg] = str_item;
         } else {
             self.throw(
                 Error.OutOfBound,
@@ -1981,15 +1991,15 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_LIST_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_LIST_SUBSCRIPT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const key_reg = args.reg1;
         const value_reg = args.reg2;
         const list_reg = args.reg3;
 
-        const list = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
-        const index = self.current_fiber.registers[key_reg];
-        const value = self.current_fiber.registers[value_reg];
+        const list = ObjList.cast(frame.registers[list_reg].obj()).?;
+        const index = frame.registers[key_reg];
+        const value = frame.registers[value_reg];
 
         if (index.integer() < 0) {
             self.throw(
@@ -2023,15 +2033,15 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_MAP_SUBSCRIPT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_MAP_SUBSCRIPT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const key_reg = args.reg1;
         const value_reg = args.reg2;
         const map_reg = args.reg3;
 
-        const map: *ObjMap = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
-        const index = self.current_fiber.registers[key_reg];
-        const value = self.current_fiber.registers[value_reg];
+        const map: *ObjMap = ObjMap.cast(frame.registers[map_reg].obj()).?;
+        const index = frame.registers[key_reg];
+        const value = frame.registers[value_reg];
 
         map.set(self.gc, index, value) catch @panic("Could not set map element");
 
@@ -2049,7 +2059,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ENUM(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ENUM(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const reg = args.reg;
@@ -2059,7 +2069,7 @@ pub const VM = struct {
             ObjEnum.init(self.gc.allocator, ObjTypeDef.cast(self.readConstant(constant).obj()).?),
         ) catch @panic("Could not create enum");
 
-        self.current_fiber.registers[reg] = Value.fromObj(enum_.toObj());
+        frame.registers[reg] = Value.fromObj(enum_.toObj());
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2075,13 +2085,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ENUM_CASE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ENUM_CASE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const enum_reg = args.reg;
         const value_reg = args.dest_reg;
 
-        const enum_ = ObjEnum.cast(self.current_fiber.registers[enum_reg].obj()).?;
-        const enum_value = self.current_fiber.registers[value_reg];
+        const enum_ = ObjEnum.cast(frame.registers[enum_reg].obj()).?;
+        const enum_value = frame.registers[value_reg];
 
         enum_.cases.append(enum_value) catch @panic("Could append new enum case");
         self.gc.markObjDirty(&enum_.obj) catch @panic("Could append new enum case");
@@ -2100,20 +2110,20 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_ENUM_CASE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_ENUM_CASE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgRegs(instruction);
         const case = args.arg;
         const enum_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const enum_ = ObjEnum.cast(self.current_fiber.registers[enum_reg].obj()).?;
+        const enum_ = ObjEnum.cast(frame.registers[enum_reg].obj()).?;
 
         const enum_case: *ObjEnumInstance = self.gc.allocateObject(ObjEnumInstance, ObjEnumInstance{
             .enum_ref = enum_,
             .case = @intCast(u8, case),
         }) catch @panic("Could not get enum case");
 
-        self.current_fiber.registers[dest_reg] = Value.fromObj(enum_case.toObj());
+        frame.registers[dest_reg] = Value.fromObj(enum_case.toObj());
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2129,14 +2139,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_ENUM_CASE_VALUE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_ENUM_CASE_VALUE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const enum_instance_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const enum_case: *ObjEnumInstance = ObjEnumInstance.cast(self.current_fiber.registers[enum_instance_reg].obj()).?;
+        const enum_case: *ObjEnumInstance = ObjEnumInstance.cast(frame.registers[enum_instance_reg].obj()).?;
 
-        self.current_fiber.registers[dest_reg] = enum_case.enum_ref.cases.items[enum_case.case];
+        frame.registers[dest_reg] = enum_case.enum_ref.cases.items[enum_case.case];
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2152,14 +2162,14 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_ENUM_CASE_FROM_VALUE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_ENUM_CASE_FROM_VALUE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
         const enum_reg = args.reg1;
         const value_reg = args.reg2;
         const dest_reg = args.reg3;
 
-        const enum_: *ObjEnum = ObjEnum.cast(self.current_fiber.registers[enum_reg].obj()).?;
-        const case_value = self.current_fiber.registers[value_reg];
+        const enum_: *ObjEnum = ObjEnum.cast(frame.registers[enum_reg].obj()).?;
+        const case_value = frame.registers[value_reg];
 
         var found = false;
         for (enum_.cases.items, 0..) |case, index| {
@@ -2169,7 +2179,7 @@ pub const VM = struct {
                     .case = @intCast(u8, index),
                 }) catch @panic("Could not create enum instance");
 
-                self.current_fiber.registers[dest_reg] = Value.fromObj(enum_case.toObj());
+                frame.registers[dest_reg] = Value.fromObj(enum_case.toObj());
                 found = true;
 
                 break;
@@ -2177,7 +2187,7 @@ pub const VM = struct {
         }
 
         if (!found) {
-            self.current_fiber.registers[dest_reg] = Value.Null;
+            frame.registers[dest_reg] = Value.Null;
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2194,7 +2204,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_OBJECT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_OBJECT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const name_constant = args.arg;
         const dest_reg = args.reg;
@@ -2208,7 +2218,7 @@ pub const VM = struct {
             ),
         ) catch @panic("Could not create object");
 
-        self.current_fiber.registers[dest_reg] = Value.fromObj(object.toObj());
+        frame.registers[dest_reg] = Value.fromObj(object.toObj());
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2224,12 +2234,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_INSTANCE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_INSTANCE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const obj_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const object_or_type = self.current_fiber.registers[obj_reg].obj();
+        const object_or_type = frame.registers[obj_reg].obj();
         const instance = self.gc.allocateObject(
             ObjObjectInstance,
             ObjObjectInstance.init(
@@ -2252,7 +2262,7 @@ pub const VM = struct {
             }
         }
 
-        self.current_fiber.registers[dest_reg] = instance.toValue();
+        frame.registers[dest_reg] = instance.toValue();
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2268,15 +2278,15 @@ pub const VM = struct {
         );
     }
 
-    fn OP_METHOD(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_METHOD(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const obj_reg = args.reg;
         const value_reg = self.readInstruction();
 
         const name = self.readString(constant);
-        const method = self.current_fiber.registers[value_reg];
-        const object = ObjObject.cast(self.current_fiber.registers[obj_reg].obj()).?;
+        const method = frame.registers[value_reg];
+        const object = ObjObject.cast(frame.registers[obj_reg].obj()).?;
 
         object.methods.put(name, ObjClosure.cast(method.obj()).?) catch @panic("Could not set object method");
 
@@ -2294,15 +2304,15 @@ pub const VM = struct {
         );
     }
 
-    fn OP_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeArgReg(instruction);
         const constant = args.arg;
         const obj_reg = args.reg;
         const value_reg = self.readInstruction();
 
         const name = self.readString(constant);
-        const property = self.current_fiber.registers[value_reg];
-        const object = ObjObject.cast(self.current_fiber.registers[obj_reg].obj()).?;
+        const property = frame.registers[value_reg];
+        const object = ObjObject.cast(frame.registers[obj_reg].obj()).?;
 
         if (object.type_def.resolved_type.?.Object.fields.contains(name.string)) {
             object.setField(self.gc, name, property) catch @panic("Could not set object field");
@@ -2325,16 +2335,16 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_OBJECT_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_OBJECT_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const obj_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const object: *ObjObject = ObjObject.cast(self.current_fiber.registers[obj_reg].obj()).?;
+        const object: *ObjObject = ObjObject.cast(frame.registers[obj_reg].obj()).?;
         const name: *ObjString = self.readString(constant);
 
-        self.current_fiber.registers[dest_reg] = object.static_fields.get(name).?;
+        frame.registers[dest_reg] = object.static_fields.get(name).?;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2350,17 +2360,17 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_INSTANCE_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_INSTANCE_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const instance_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const instance = ObjObjectInstance.cast(self.current_fiber.registers[instance_reg].obj()).?;
+        const instance = ObjObjectInstance.cast(frame.registers[instance_reg].obj()).?;
         const name = self.readString(constant);
 
         if (instance.fields.get(name)) |field| {
-            self.current_fiber.registers[dest_reg] = field;
+            frame.registers[dest_reg] = field;
         } else if (instance.object) |object| {
             if (object.methods.get(name)) |method| {
                 self.bindMethod(
@@ -2388,13 +2398,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_LIST_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_LIST_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const list_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const list = ObjList.cast(self.current_fiber.registers[list_reg].obj()).?;
+        const list = ObjList.cast(frame.registers[list_reg].obj()).?;
         const name: *ObjString = self.readString(constant);
 
         if (list.member(self, name) catch @panic("Could not get list member")) |member| {
@@ -2421,13 +2431,13 @@ pub const VM = struct {
             },
         );
     }
-    fn OP_GET_MAP_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_MAP_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const map_reg = args.reg;
         const dest_reg = args.dest_reg;
 
-        const map = ObjMap.cast(self.current_fiber.registers[map_reg].obj()).?;
+        const map = ObjMap.cast(frame.registers[map_reg].obj()).?;
         const name: *ObjString = self.readString(constant);
 
         if (map.member(self, name) catch @panic("Could not get map method")) |member| {
@@ -2455,7 +2465,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_STRING_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_STRING_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const str_reg = args.reg;
@@ -2467,7 +2477,7 @@ pub const VM = struct {
             self.bindMethod(
                 null,
                 member,
-                self.current_fiber.registers[str_reg],
+                frame.registers[str_reg],
                 dest_reg,
             ) catch @panic("Could not bind method");
         } else {
@@ -2488,7 +2498,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_PATTERN_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_PATTERN_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const pat_reg = args.reg;
@@ -2500,7 +2510,7 @@ pub const VM = struct {
             self.bindMethod(
                 null,
                 member,
-                self.current_fiber.registers[pat_reg],
+                frame.registers[pat_reg],
                 dest_reg,
             ) catch @panic("Could not bind method");
         } else {
@@ -2521,7 +2531,7 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GET_FIBER_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GET_FIBER_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const fib_reg = args.reg;
@@ -2533,7 +2543,7 @@ pub const VM = struct {
             self.bindMethod(
                 null,
                 member,
-                self.current_fiber.registers[fib_reg],
+                frame.registers[fib_reg],
                 dest_reg,
             ) catch @panic("Could not bind method");
         }
@@ -2552,20 +2562,20 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_OBJECT_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_OBJECT_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const value_reg = args.dest_reg;
         const obj_reg = args.reg;
 
-        const object: *ObjObject = ObjObject.cast(self.current_fiber.registers[obj_reg].obj()).?;
+        const object: *ObjObject = ObjObject.cast(frame.registers[obj_reg].obj()).?;
         const name: *ObjString = self.readString(constant);
 
         // Set new value
         object.setStaticField(
             self.gc,
             name,
-            self.current_fiber.registers[value_reg],
+            frame.registers[value_reg],
         ) catch @panic("Could not set static field");
 
         const next_full_instruction = self.readInstruction();
@@ -2582,20 +2592,20 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SET_INSTANCE_PROPERTY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SET_INSTANCE_PROPERTY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
         const constant = @intCast(FullArg, self.readInstruction());
         const value_reg = args.dest_reg;
         const inst_reg = args.reg;
 
-        const instance: *ObjObjectInstance = ObjObjectInstance.cast(self.current_fiber.registers[inst_reg].obj()).?;
+        const instance: *ObjObjectInstance = ObjObjectInstance.cast(frame.registers[inst_reg].obj()).?;
         const name: *ObjString = self.readString(constant);
 
         // Set new value
         instance.setField(
             self.gc,
             name,
-            self.current_fiber.registers[value_reg],
+            frame.registers[value_reg],
         ) catch @panic("Could not set instance property");
 
         const next_full_instruction = self.readInstruction();
@@ -2612,10 +2622,10 @@ pub const VM = struct {
         );
     }
 
-    fn OP_NOT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_NOT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
 
-        self.current_fiber.registers[args.dest_reg] = Value.fromBoolean(!self.current_fiber.registers[args.reg].boolean());
+        frame.registers[args.dest_reg] = Value.fromBoolean(!frame.registers[args.reg].boolean());
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2631,12 +2641,12 @@ pub const VM = struct {
         );
     }
 
-    fn OP_BNOT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_BNOT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegReg(instruction);
 
-        const value = self.current_fiber.registers[args.reg];
+        const value = frame.registers[args.reg];
 
-        self.current_fiber.registers[args.dest_reg] = Value.fromInteger(~(if (value.isInteger()) value.integer() else @floatToInt(i32, value.float())));
+        frame.registers[args.dest_reg] = Value.fromInteger(~(if (value.isInteger()) value.integer() else @floatToInt(i32, value.float())));
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2652,11 +2662,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_GREATER(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_GREATER(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left_value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right_value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left_value = floatToInteger(frame.registers[args.reg1]);
+        const right_value = floatToInteger(frame.registers[args.reg2]);
 
         const left_f: ?f64 = if (left_value.isFloat()) left_value.float() else null;
         const left_i: ?i32 = if (left_value.isInteger()) left_value.integer() else null;
@@ -2665,15 +2675,15 @@ pub const VM = struct {
 
         if (left_f) |lf| {
             if (right_f) |rf| {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(lf > rf);
+                frame.registers[args.reg3] = Value.fromBoolean(lf > rf);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(lf > @intToFloat(f64, right_i.?));
+                frame.registers[args.reg3] = Value.fromBoolean(lf > @intToFloat(f64, right_i.?));
             }
         } else {
             if (right_f) |rf| {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(@intToFloat(f64, left_i.?) > rf);
+                frame.registers[args.reg3] = Value.fromBoolean(@intToFloat(f64, left_i.?) > rf);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(left_i.? > right_i.?);
+                frame.registers[args.reg3] = Value.fromBoolean(left_i.? > right_i.?);
             }
         }
 
@@ -2691,11 +2701,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LESS(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_LESS(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left_value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right_value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left_value = floatToInteger(frame.registers[args.reg1]);
+        const right_value = floatToInteger(frame.registers[args.reg2]);
 
         const left_f: ?f64 = if (left_value.isFloat()) left_value.float() else null;
         const left_i: ?i32 = if (left_value.isInteger()) left_value.integer() else null;
@@ -2704,15 +2714,15 @@ pub const VM = struct {
 
         if (left_f) |lf| {
             if (right_f) |rf| {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(lf < rf);
+                frame.registers[args.reg3] = Value.fromBoolean(lf < rf);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(lf < @intToFloat(f64, right_i.?));
+                frame.registers[args.reg3] = Value.fromBoolean(lf < @intToFloat(f64, right_i.?));
             }
         } else {
             if (right_f) |rf| {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(@intToFloat(f64, left_i.?) < rf);
+                frame.registers[args.reg3] = Value.fromBoolean(@intToFloat(f64, left_i.?) < rf);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromBoolean(left_i.? < right_i.?);
+                frame.registers[args.reg3] = Value.fromBoolean(left_i.? < right_i.?);
             }
         }
 
@@ -2730,13 +2740,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ADD_STRING(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ADD_STRING(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: *ObjString = ObjString.cast(self.current_fiber.registers[args.reg1].obj()).?;
-        const right: *ObjString = ObjString.cast(self.current_fiber.registers[args.reg2].obj()).?;
+        const left: *ObjString = ObjString.cast(frame.registers[args.reg1].obj()).?;
+        const right: *ObjString = ObjString.cast(frame.registers[args.reg2].obj()).?;
 
-        self.current_fiber.registers[args.reg3] = Value.fromObj(
+        frame.registers[args.reg3] = Value.fromObj(
             (left.concat(self, right) catch @panic("Could not concatenate strings")).toObj(),
         );
 
@@ -2754,17 +2764,17 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ADD_LIST(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ADD_LIST(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: *ObjList = ObjList.cast(self.current_fiber.registers[args.reg1].obj()).?;
-        const right: *ObjList = ObjList.cast(self.current_fiber.registers[args.reg2].obj()).?;
+        const left: *ObjList = ObjList.cast(frame.registers[args.reg1].obj()).?;
+        const right: *ObjList = ObjList.cast(frame.registers[args.reg2].obj()).?;
 
         var new_list = std.ArrayList(Value).init(self.gc.allocator);
         new_list.appendSlice(left.items.items) catch @panic("Could not concatenate lists");
         new_list.appendSlice(right.items.items) catch @panic("Could not concatenate lists");
 
-        self.current_fiber.registers[args.reg3] =
+        frame.registers[args.reg3] =
             (self.gc.allocateObject(ObjList, ObjList{
             .type_def = left.type_def,
             .methods = left.methods,
@@ -2785,11 +2795,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ADD_MAP(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ADD_MAP(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: *ObjMap = ObjMap.cast(self.current_fiber.registers[args.reg1].obj()).?;
-        const right: *ObjMap = ObjMap.cast(self.current_fiber.registers[args.reg2].obj()).?;
+        const left: *ObjMap = ObjMap.cast(frame.registers[args.reg1].obj()).?;
+        const right: *ObjMap = ObjMap.cast(frame.registers[args.reg2].obj()).?;
 
         var new_map = left.map.clone() catch @panic("Could not concatenate maps");
         var it = right.map.iterator();
@@ -2797,7 +2807,7 @@ pub const VM = struct {
             new_map.put(entry.key_ptr.*, entry.value_ptr.*) catch @panic("Could not concatenate maps");
         }
 
-        self.current_fiber.registers[args.reg3] =
+        frame.registers[args.reg3] =
             (self.gc.allocateObject(ObjMap, ObjMap{
             .type_def = left.type_def,
             .methods = left.methods,
@@ -2818,11 +2828,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_ADD(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_ADD(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -2830,10 +2840,10 @@ pub const VM = struct {
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
         if (right_f != null or left_f != null) {
-            self.current_fiber.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) + (right_f orelse @intToFloat(f64, right_i.?)));
+            frame.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) + (right_f orelse @intToFloat(f64, right_i.?)));
         } else {
             // both integers
-            self.current_fiber.registers[args.reg3] = Value.fromInteger(left_i.? + right_i.?);
+            frame.registers[args.reg3] = Value.fromInteger(left_i.? + right_i.?);
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2850,11 +2860,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SUBTRACT(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SUBTRACT(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -2862,9 +2872,9 @@ pub const VM = struct {
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
         if (right_f != null or left_f != null) {
-            self.current_fiber.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) - (right_f orelse @intToFloat(f64, right_i.?)));
+            frame.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) - (right_f orelse @intToFloat(f64, right_i.?)));
         } else {
-            self.current_fiber.registers[args.reg3] = Value.fromInteger(left_i.? - right_i.?);
+            frame.registers[args.reg3] = Value.fromInteger(left_i.? - right_i.?);
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2881,11 +2891,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_MULTIPLY(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_MULTIPLY(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -2893,9 +2903,9 @@ pub const VM = struct {
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
         if (right_f != null or left_f != null) {
-            self.current_fiber.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) * (right_f orelse @intToFloat(f64, right_i.?)));
+            frame.registers[args.reg3] = Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) * (right_f orelse @intToFloat(f64, right_i.?)));
         } else {
-            self.current_fiber.registers[args.reg3] = Value.fromInteger(left_i.? * right_i.?);
+            frame.registers[args.reg3] = Value.fromInteger(left_i.? * right_i.?);
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2912,18 +2922,18 @@ pub const VM = struct {
         );
     }
 
-    fn OP_DIVIDE(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_DIVIDE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
         const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
-        self.current_fiber.registers[args.reg3] =
+        frame.registers[args.reg3] =
             Value.fromFloat((left_f orelse @intToFloat(f64, left_i.?)) / (right_f orelse @intToFloat(f64, right_i.?)));
 
         const next_full_instruction = self.readInstruction();
@@ -2940,11 +2950,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_MOD(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_MOD(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -2952,9 +2962,9 @@ pub const VM = struct {
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
         if (right_f != null or left_f != null) {
-            self.current_fiber.registers[args.reg3] = Value.fromFloat(@mod((left_f orelse @intToFloat(f64, left_i.?)), (right_f orelse @intToFloat(f64, right_i.?))));
+            frame.registers[args.reg3] = Value.fromFloat(@mod((left_f orelse @intToFloat(f64, left_i.?)), (right_f orelse @intToFloat(f64, right_i.?))));
         } else {
-            self.current_fiber.registers[args.reg3] = Value.fromInteger(@mod(left_i.?, right_i.?));
+            frame.registers[args.reg3] = Value.fromInteger(@mod(left_i.?, right_i.?));
         }
 
         const next_full_instruction = self.readInstruction();
@@ -2971,18 +2981,18 @@ pub const VM = struct {
         );
     }
 
-    fn OP_BAND(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_BAND(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
         const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
-        self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) & (right_i orelse @floatToInt(i32, right_f.?)));
+        frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) & (right_i orelse @floatToInt(i32, right_f.?)));
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -2998,18 +3008,18 @@ pub const VM = struct {
         );
     }
 
-    fn OP_BOR(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_BOR(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
         const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
-        self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) | (right_i orelse @floatToInt(i32, right_f.?)));
+        frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) | (right_i orelse @floatToInt(i32, right_f.?)));
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -3025,18 +3035,18 @@ pub const VM = struct {
         );
     }
 
-    fn OP_XOR(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_XOR(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
         const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
         const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
 
-        self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) ^ (right_i orelse @floatToInt(i32, right_f.?)));
+        frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) ^ (right_i orelse @floatToInt(i32, right_f.?)));
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -3052,11 +3062,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SHL(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SHL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -3066,15 +3076,15 @@ pub const VM = struct {
 
         if (b < 0) {
             if (b * -1 > std.math.maxInt(u5)) {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger(0);
+                frame.registers[args.reg3] = Value.fromInteger(0);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) >> @truncate(u5, @intCast(u64, b * -1)));
+                frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) >> @truncate(u5, @intCast(u64, b * -1)));
             }
         } else {
             if (b > std.math.maxInt(u5)) {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger(0);
+                frame.registers[args.reg3] = Value.fromInteger(0);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) << @truncate(u5, @intCast(u64, b)));
+                frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) << @truncate(u5, @intCast(u64, b)));
             }
         }
 
@@ -3092,11 +3102,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_SHR(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_SHR(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        const left: Value = floatToInteger(self.current_fiber.registers[args.reg1]);
-        const right: Value = floatToInteger(self.current_fiber.registers[args.reg2]);
+        const left: Value = floatToInteger(frame.registers[args.reg1]);
+        const right: Value = floatToInteger(frame.registers[args.reg2]);
 
         const right_f: ?f64 = if (right.isFloat()) right.float() else null;
         const left_f: ?f64 = if (left.isFloat()) left.float() else null;
@@ -3106,15 +3116,15 @@ pub const VM = struct {
 
         if (b < 0) {
             if (b * -1 > std.math.maxInt(u5)) {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger(0);
+                frame.registers[args.reg3] = Value.fromInteger(0);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) << @truncate(u5, @intCast(u64, b * -1)));
+                frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) << @truncate(u5, @intCast(u64, b * -1)));
             }
         } else {
             if (b > std.math.maxInt(u5)) {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger(0);
+                frame.registers[args.reg3] = Value.fromInteger(0);
             } else {
-                self.current_fiber.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) >> @truncate(u5, @intCast(u64, b)));
+                frame.registers[args.reg3] = Value.fromInteger((left_i orelse @floatToInt(i32, left_f.?)) >> @truncate(u5, @intCast(u64, b)));
             }
         }
 
@@ -3132,13 +3142,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_EQUAL(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_EQUAL(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        self.current_fiber.registers[args.reg3] = Value.fromBoolean(
+        frame.registers[args.reg3] = Value.fromBoolean(
             valueEql(
-                self.current_fiber.registers[args.reg1],
-                self.current_fiber.registers[args.reg2],
+                frame.registers[args.reg1],
+                frame.registers[args.reg2],
             ),
         );
 
@@ -3156,13 +3166,13 @@ pub const VM = struct {
         );
     }
 
-    fn OP_IS(self: *Self, _: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+    fn OP_IS(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
         const args = getCodeRegs(instruction);
 
-        self.current_fiber.registers[args.reg3] = Value.fromBoolean(
+        frame.registers[args.reg3] = Value.fromBoolean(
             valueIs(
-                self.current_fiber.registers[args.reg2],
-                self.current_fiber.registers[args.reg1],
+                frame.registers[args.reg2],
+                frame.registers[args.reg1],
             ),
         );
 
@@ -3197,11 +3207,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_JUMP_IF_FALSE(self: *Self, current_frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_JUMP_IF_FALSE(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         const cond_reg = @intCast(Reg, self.readInstruction());
 
-        if (!self.current_fiber.registers[cond_reg].boolean()) {
-            current_frame.ip += arg;
+        if (!frame.registers[cond_reg].boolean()) {
+            frame.ip += arg;
         }
 
         const next_full_instruction = self.readInstruction();
@@ -3218,11 +3228,11 @@ pub const VM = struct {
         );
     }
 
-    fn OP_JUMP_IF_NOT_NULL(self: *Self, current_frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
+    fn OP_JUMP_IF_NOT_NULL(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
         const cond_reg = @intCast(Reg, self.readInstruction());
 
-        if (!self.current_fiber.registers[cond_reg].isNull()) {
-            current_frame.ip += arg;
+        if (!frame.registers[cond_reg].isNull()) {
+            frame.ip += arg;
         }
 
         const next_full_instruction = self.readInstruction();
@@ -3239,8 +3249,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_LOOP(self: *Self, current_frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
-        current_frame.ip -= arg;
+    fn OP_LOOP(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
+        frame.ip -= arg;
 
         const next_full_instruction = self.readInstruction();
         @call(
@@ -3392,8 +3402,8 @@ pub const VM = struct {
         );
     }
 
-    fn OP_UNWRAP(self: *Self, _: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
-        if (self.current_fiber.registers[arg].isNull()) {
+    fn OP_UNWRAP(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, arg: FullArg) void {
+        if (frame.registers[arg].isNull()) {
             self.throw(
                 Error.UnwrappedNull,
                 (self.gc.copyString("Force unwrapped optional is null") catch @panic("Could not raise error")).toValue(),
@@ -3429,6 +3439,8 @@ pub const VM = struct {
                     next_full_instruction,
                 },
             );
+            dumpStack(self);
+            dumpRegisters(self);
         }
 
         op_table[@enumToInt(next_instruction)](
@@ -3514,11 +3526,10 @@ pub const VM = struct {
                 if (frame.?.error_value) |error_value| {
                     // Push error_value as failed function return value
                     if (frame.?.result_register) |result_register| {
-                        self.current_fiber.registers[result_register] = error_value;
+                        self.currentFrame().?.registers[result_register] = error_value;
                     } else {
                         self.push(error_value);
                     }
-
 
                     return;
                 }
@@ -3606,6 +3617,7 @@ pub const VM = struct {
             else
                 null,
             .result_register = dest_register,
+            .registers = [_]Value{Value.Void} ** 255,
         };
 
         frame.error_value = catch_value;
@@ -3654,7 +3666,7 @@ pub const VM = struct {
             self.current_fiber.stack_top = self.current_fiber.stack_top - arg_count - 1;
 
             if (dest_register) |dest_reg| {
-                self.current_fiber.registers[dest_reg] = result;
+                self.currentFrame().?.registers[dest_reg] = result;
             } else {
                 self.push(result);
             }
@@ -3667,7 +3679,7 @@ pub const VM = struct {
                 // Default value in case of error
                 self.current_fiber.stack_top = self.current_fiber.stack_top - arg_count - 1;
                 if (dest_register) |dest_reg| {
-                    self.current_fiber.registers[dest_reg] = catch_value.?;
+                    self.currentFrame().?.registers[dest_reg] = catch_value.?;
                 } else {
                     self.push(catch_value.?);
                 }
@@ -3720,7 +3732,7 @@ pub const VM = struct {
 
                 // Default value in case of error
                 if (dest_register) |dest_reg| {
-                    self.current_fiber.registers[dest_reg] = catch_value.?;
+                    self.currentFrame().?.registers[dest_reg] = catch_value.?;
                 } else {
                     self.push(catch_value.?);
                 }
@@ -3736,7 +3748,7 @@ pub const VM = struct {
             }
         } else if (native_return == 1) {
             if (dest_register) |dest_reg| {
-                self.current_fiber.registers[dest_reg] = self.pop();
+                self.currentFrame().?.registers[dest_reg] = self.pop();
             }
         }
     }
@@ -3748,7 +3760,7 @@ pub const VM = struct {
             .native = native,
         });
 
-        self.current_fiber.registers[dest] = Value.fromObj(bound.toObj());
+        self.currentFrame().?.registers[dest] = Value.fromObj(bound.toObj());
     }
 
     pub fn callValue(

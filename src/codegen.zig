@@ -37,6 +37,7 @@ pub const Frame = struct {
     function: ?*ObjFunction = null,
     return_counts: bool = false,
     return_emitted: bool = false,
+    register_top: u8 = 0,
 
     try_should_handle: ?std.AutoHashMap(*ObjTypeDef, void) = null,
 };
@@ -54,8 +55,6 @@ pub const CodeGen = struct {
     // Used to generate error messages
     parser: *Parser,
 
-    register_top: u8 = 0,
-
     pub fn init(
         gc: *GarbageCollector,
         parser: *Parser,
@@ -71,26 +70,26 @@ pub const CodeGen = struct {
     pub fn deinit(_: *Self) void {}
 
     pub fn pushRegister(self: *Self) u8 {
-        self.register_top += 1;
+        self.current.?.register_top += 1;
 
-        if (self.register_top >= 255) {
+        if (self.current.?.register_top >= 255) {
             @panic("Expressions uses too many registers");
         }
 
-        return self.register_top - 1;
+        return self.current.?.register_top - 1;
     }
 
     pub fn popRegister(self: *Self) u8 {
-        self.register_top -= 1;
+        self.current.?.register_top -= 1;
 
-        assert(self.register_top >= 0);
+        assert(self.current.?.register_top >= 0);
 
-        return self.register_top;
+        return self.current.?.register_top;
     }
 
     pub fn peekRegister(self: *Self, distance: u8) u8 {
-        assert(distance <= self.register_top);
-        return self.register_top - distance - 1;
+        assert(distance <= self.current.?.register_top);
+        return self.current.?.register_top - distance - 1;
     }
 
     pub inline fn currentCode(self: *Self) usize {
