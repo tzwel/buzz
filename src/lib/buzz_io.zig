@@ -92,8 +92,7 @@ export fn FileClose(ctx: *api.NativeCtx) c_int {
         ctx.vm.bz_peek(0).integer(),
     );
 
-    const file: std.fs.File = std.fs.File{ .handle = handle };
-    file.close();
+    (std.fs.File{ .handle = handle }).close();
 
     return 0;
 }

@@ -568,6 +568,14 @@ pub const CodeGen = struct {
         try self.emitCodeReg(location, .OP_POP, dest_register);
     }
 
+    pub inline fn OP_PEEK(self: *Self, location: Token, distance: Arg, dest_register: Reg) !void {
+        try self.emitCodeArgReg(location, .OP_PEEK, distance, dest_register);
+    }
+
+    pub inline fn OP_CLONE(self: *Self, location: Token, value_reg: Reg, dest: Reg) !void {
+        try self.emitCodeRegReg(location, .OP_CLONE, value_reg, dest);
+    }
+
     pub inline fn OP_CLOSURE(self: *Self, location: Token, constant: Arg, dest_register: Reg) !void {
         try self.emitCodeArgReg(location, .OP_CLOSURE, constant, dest_register);
     }
@@ -576,8 +584,8 @@ pub const CodeGen = struct {
         try self.emitCodeReg(location, .OP_YIELD, expr_register);
     }
 
-    pub inline fn OP_RESOLVE(self: *Self, location: Token, fiber_register: Reg) !void {
-        try self.emitCodeReg(location, .OP_RESOLVE, fiber_register);
+    pub inline fn OP_RESOLVE(self: *Self, location: Token, fiber_register: Reg, dest_reg: Reg) !void {
+        try self.emitCodeRegReg(location, .OP_RESOLVE, fiber_register, dest_reg);
     }
 
     pub inline fn OP_RESUME(self: *Self, location: Token, fiber_register: Reg, yield_register: Reg) !void {

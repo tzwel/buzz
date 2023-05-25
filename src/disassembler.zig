@@ -295,6 +295,7 @@ pub fn disassembleInstruction(chunk: *Chunk, offset: usize) usize {
         .OP_DEFINE_GLOBAL,
         .OP_ENUM,
         .OP_IMPORT,
+        .OP_PEEK,
         => codeArgRegInstruction(instruction, chunk, offset),
 
         .OP_CALL,
@@ -310,6 +311,7 @@ pub fn disassembleInstruction(chunk: *Chunk, offset: usize) usize {
         .OP_ENUM_CASE,
         .OP_GET_ENUM_CASE_VALUE,
         .OP_INSTANCE,
+        .OP_CLONE,
         => codeRegRegInstruction(instruction, chunk, offset),
 
         .OP_ADD_LIST,

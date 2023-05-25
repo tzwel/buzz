@@ -19,6 +19,8 @@ pub const OpCode = enum(Code) {
     OP_FALSE,
     OP_POP,
     OP_PUSH,
+    OP_PEEK,
+    OP_CLONE,
 
     OP_DEFINE_GLOBAL,
     OP_GET_GLOBAL,

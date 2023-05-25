@@ -613,6 +613,11 @@ pub const GarbageCollector = struct {
                 std.debug.print("DONE MARKING UPVALUES OF FIBER @{}\n", .{@ptrToInt(ufiber)});
             }
 
+            // Mark resolved value
+            if (ufiber.resolved_value) |resolved_value| {
+                try self.markValue(resolved_value);
+            }
+
             current_fiber = ufiber.parent_fiber;
         }
     }

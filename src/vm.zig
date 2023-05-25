@@ -126,6 +126,9 @@ pub const Fiber = struct {
     // true: we did `resolve fiber`, false: we did `resume fiber`
     resolved: bool = false,
 
+    // When the fiber finishes within a resume and not a resolve, we need to remember the result because the frame is popped
+    resolved_value: ?Value = null,
+
     // When within a try catch in a JIT compiled function
     try_context: ?*TryCtx = null,
 
@@ -173,11 +176,12 @@ pub const Fiber = struct {
         self.frames.deinit();
     }
 
-    pub fn start(self: *Self, vm: *VM, resolve_reg: ?Reg) !void {
+    pub fn start(self: *Self, vm: *VM, yield_reg: ?Reg, resolve_reg: ?Reg) !void {
         assert(self.status == .Instanciated);
 
-        self.resolve_register = resolve_reg;
         vm.current_fiber = self;
+        vm.current_fiber.yield_register = yield_reg;
+        vm.current_fiber.resolve_register = resolve_reg;
 
         switch (self.call_type) {
             .OP_ROUTINE => { // | closure | ...args | ?catch |
@@ -216,8 +220,10 @@ pub const Fiber = struct {
         vm.current_fiber = self.parent_fiber.?;
 
         if (self.parent_fiber) |parent_fiber| {
-            parent_fiber.currentFrame().?.registers[parent_fiber.yield_register.?] = yielded_value;
-            parent_fiber.yield_register = null;
+            if (self.yield_register) |yield_register| {
+                parent_fiber.currentFrame().?.registers[yield_register] = yielded_value;
+                parent_fiber.yield_register = null;
+            }
         }
 
         self.status = .Yielded;
@@ -243,7 +249,7 @@ pub const Fiber = struct {
         switch (self.status) {
             .Instanciated => {
                 // No yet started, do so
-                try self.start(vm, resolve_reg);
+                try self.start(vm, yield_reg, resolve_reg);
             },
             .Yielded => {
                 // Give control to fiber
@@ -266,25 +272,18 @@ pub const Fiber = struct {
         self.resolved = true;
 
         switch (self.status) {
-            .Instanciated => try self.start(vm, dest_reg),
+            .Instanciated => try self.start(vm, null, dest_reg),
             .Yielded => try self.resume_(vm, null, dest_reg),
             .Over => {
                 // Already over, just take the result value
                 const parent_fiber = vm.current_fiber;
                 vm.current_fiber = self;
 
-                const result = if (vm.currentFrame().?.result_register) |result_register|
-                    vm.currentFrame().?.registers[result_register]
-                else
-                    vm.pop();
+                const result = self.resolved_value orelse Value.Void;
 
                 vm.current_fiber = parent_fiber;
-                if (vm.current_fiber.resolve_register) |resolve_register| {
-                    vm.currentFrame().?.registers[resolve_register] = result;
-                    vm.current_fiber.resolve_register = null;
-                } else {
-                    vm.push(result);
-                }
+                vm.currentFrame().?.registers[dest_reg] = result;
+                self.resolve_register = null;
 
                 // FIXME: but this means we can do several `resolve fiber`
             },
@@ -297,23 +296,21 @@ pub const Fiber = struct {
         self.status = .Over;
         const resolved = self.resolved;
 
-        // Put the result back stack so `resolve` can pick it up
-        if (vm.current_fiber.resolve_register) |resolve_register| {
-            vm.currentFrame().?.registers[resolve_register] = result;
-        } else {
-            vm.push(result);
-        }
+        self.resolved_value = result;
 
         // Go back to parent fiber
         vm.current_fiber = self.parent_fiber.?;
 
-        if (vm.current_fiber.resolve_register) |resolve_register| {
+        if (self.resolve_register) |resolve_register| {
             vm.currentFrame().?.registers[resolve_register] = if (resolved)
                 result // We did `resolve fiber` we want the returned value
             else
                 Value.Null; // We did `resume fiber` and hit return, we don't yet care about that value
-        } else {
-            vm.push(if (resolved) result else Value.Null);
+        } // else we discard the result
+
+        // If the fiber finishes because of a `resume`, we put null in the yield register
+        if (self.yield_register) |yield_register| {
+            vm.currentFrame().?.registers[yield_register] = Value.Null;
         }
 
         // Do we need to finish OP_CODE that triggered the yield?
@@ -633,6 +630,8 @@ pub const VM = struct {
         OP_FALSE,
         OP_POP,
         OP_PUSH,
+        OP_PEEK,
+        OP_CLONE,
 
         OP_DEFINE_GLOBAL,
         OP_GET_GLOBAL,
@@ -737,10 +736,6 @@ pub const VM = struct {
     };
 
     fn dispatch(self: *Self, current_frame: *CallFrame, full_instruction: Instruction, instruction: OpCode, arg: FullArg) void {
-        if (BuildOptions.debug_stack) {
-            dumpStack(self);
-        }
-
         if (BuildOptions.debug_current_instruction or BuildOptions.debug_stack) {
             std.debug.print(
                 "{}: {} {x}\n",
@@ -873,6 +868,48 @@ pub const VM = struct {
 
     fn OP_POP(self: *Self, frame: *CallFrame, _: Instruction, _: OpCode, reg: FullArg) void {
         frame.registers[reg] = self.pop();
+
+        const next_full_instruction: Instruction = self.readInstruction();
+        @call(
+            .always_tail,
+            dispatch,
+            .{
+                self,
+                self.currentFrame().?,
+                next_full_instruction,
+                getCode(next_full_instruction),
+                getArg(next_full_instruction),
+            },
+        );
+    }
+
+    fn OP_PEEK(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const args = getCodeArgReg(instruction);
+        const dist = args.arg;
+        const reg = args.reg;
+
+        frame.registers[reg] = self.peek(dist);
+
+        const next_full_instruction: Instruction = self.readInstruction();
+        @call(
+            .always_tail,
+            dispatch,
+            .{
+                self,
+                self.currentFrame().?,
+                next_full_instruction,
+                getCode(next_full_instruction),
+                getArg(next_full_instruction),
+            },
+        );
+    }
+
+    fn OP_CLONE(self: *Self, frame: *CallFrame, instruction: Instruction, _: OpCode, _: FullArg) void {
+        const args = getCodeRegReg(instruction);
+        const val_reg = args.reg;
+        const dest = args.dest_reg;
+
+        frame.registers[dest] = self.cloneValue(frame.registers[val_reg]) catch @panic("Could not clone value");
 
         const next_full_instruction: Instruction = self.readInstruction();
         @call(
@@ -1699,10 +1736,6 @@ pub const VM = struct {
 
             self.import_registry.put(fullpath, import_cache) catch @panic("Could not import script");
         }
-
-        // Pop path and closure
-        _ = self.pop();
-        _ = self.pop();
 
         const next_full_instruction = self.readInstruction();
         @call(
