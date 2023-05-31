@@ -1318,7 +1318,9 @@ pub const ListNode = struct {
             list_register,
         );
 
-        // TODO: push on stack the list so it's not collected while adding elements to it
+        if (self.items.len > 0) {
+            try codegen.OP_PUSH(node.location, codegen.peekRegister(0));
+        }
 
         for (self.items) |item| {
             if (item.type_def.?.def_type == .Placeholder) {
@@ -1342,7 +1344,9 @@ pub const ListNode = struct {
             }
         }
 
-        // Don't pop list register because we don't know if the list will be used
+        if (self.items.len > 0) {
+            try codegen.OP_POP(node.location, codegen.peekRegister(0));
+        }
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -1504,6 +1508,10 @@ pub const MapNode = struct {
             map_register,
         );
 
+        if (self.keys.len > 0) {
+            try codegen.OP_PUSH(node.location, codegen.peekRegister(0));
+        }
+
         assert(self.keys.len == self.values.len);
 
         for (self.keys, 0..) |key, i| {
@@ -1537,6 +1545,10 @@ pub const MapNode = struct {
             if (!value_type.eql(value.type_def.?)) {
                 try codegen.reportTypeCheckAt(value_type, value.type_def.?, "Bad value type", value.location);
             }
+        }
+
+        if (self.keys.len > 0) {
+            try codegen.OP_POP(node.location, codegen.peekRegister(0));
         }
 
         try node.patchOptJumps(codegen);
@@ -6826,6 +6838,11 @@ pub const ObjectInitNode = struct {
         );
         const instance_register = codegen.peekRegister(0);
 
+        // Push on stack to a void collection while it's being initialized
+        if (self.properties.count() > 0) {
+            try codegen.OP_PUSH(node.location, instance_register);
+        }
+
         if (node.type_def == null or node.type_def.?.def_type == .Placeholder) {
             try codegen.reportPlaceholder(node.type_def.?.resolved_type.?.Placeholder);
         } else if (node.type_def.?.def_type != .ObjectInstance) {
@@ -6874,6 +6891,10 @@ pub const ObjectInitNode = struct {
             } else {
                 try codegen.reportErrorFmt(node.location, "Property `{s}` does not exists", .{property_name});
             }
+        }
+
+        if (self.properties.count() > 0) {
+            try codegen.OP_POP(node.location, instance_register);
         }
 
         // Did we initialized all properties without a default value?
