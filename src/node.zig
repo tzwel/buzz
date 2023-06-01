@@ -999,19 +999,21 @@ pub const StringNode = struct {
             return null;
         }
 
-        var self = Self.cast(node).?;
+        const self = Self.cast(node).?;
+
+        // Push the empty string which is always the constant 0
+        try codegen.OP_CONSTANT(
+            self.node.location,
+            0,
+            codegen.pushRegister(),
+        );
 
         if (self.elements.len == 0) {
-            // Push the empty string which is always the constant 0
-            try codegen.OP_CONSTANT(
-                self.node.location,
-                0,
-                codegen.pushRegister(),
-            );
-
             try node.endScope(codegen);
 
             return null;
+        } else {
+            try codegen.OP_PUSH(self.node.location, codegen.peekRegister(0));
         }
 
         for (self.elements, 0..) |element, index| {
@@ -1022,6 +1024,7 @@ pub const StringNode = struct {
             }
 
             _ = try element.toByteCode(element, codegen, breaks);
+            // try codegen.OP_PUSH(element.location, codegen.peekRegister(0));
 
             if (element.type_def.?.def_type != .String or element.type_def.?.optional) {
                 try codegen.OP_TO_STRING(
@@ -1031,18 +1034,28 @@ pub const StringNode = struct {
                 );
             }
 
-            if (index >= 1) {
-                const reg2 = codegen.popRegister();
-                const reg1 = codegen.popRegister();
+            const reg2 = codegen.popRegister();
+            const reg1 = codegen.popRegister();
 
-                try codegen.OP_ADD_STRING(
-                    self.node.location,
-                    reg1,
-                    reg2,
-                    codegen.pushRegister(),
-                );
+            try codegen.OP_ADD_STRING(
+                self.node.location,
+                reg1,
+                reg2,
+                codegen.pushRegister(),
+            );
+
+            try codegen.OP_POP(self.node.location, codegen.pushRegister());
+            _ = codegen.popRegister();
+            // try codegen.OP_POP(self.node.location, codegen.pushRegister());
+            // _ = codegen.popRegister();
+
+            if (self.elements.len > 1 and index < self.elements.len - 1) {
+                try codegen.OP_PUSH(element.location, codegen.peekRegister(0));
             }
         }
+
+        // try codegen.OP_POP(self.node.location, codegen.pushRegister());
+        // _ = codegen.popRegister();
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -2480,6 +2493,7 @@ pub const BinaryNode = struct {
 
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
+
                 try codegen.OP_BAND(
                     self.node.location,
                     codegen.popRegister(),
@@ -2616,6 +2630,11 @@ pub const BinaryNode = struct {
             },
             .BangEqual => {
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_PUSH(self.left.location, codegen.peekRegister(0));
+                }
+
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
                 try codegen.OP_EQUAL(
                     self.node.location,
@@ -2628,9 +2647,19 @@ pub const BinaryNode = struct {
                     codegen.popRegister(),
                     codegen.pushRegister(),
                 );
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_POP(self.left.location, codegen.pushRegister());
+                    _ = codegen.popRegister();
+                }
             },
             .EqualEqual => {
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_PUSH(self.left.location, codegen.peekRegister(0));
+                }
+
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
                 try codegen.OP_EQUAL(
                     self.node.location,
@@ -2638,6 +2667,11 @@ pub const BinaryNode = struct {
                     codegen.popRegister(),
                     codegen.pushRegister(),
                 );
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_POP(self.left.location, codegen.pushRegister());
+                    _ = codegen.popRegister();
+                }
             },
             .Plus => {
                 // zig fmt: off
@@ -2651,7 +2685,17 @@ pub const BinaryNode = struct {
                 // zig fmt: on
 
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_PUSH(self.left.location, codegen.peekRegister(0));
+                }
+
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_PUSH(self.left.location, codegen.peekRegister(0));
+                }
+
                 try codegen.emitCodeRegs(
                     self.node.location,
                     switch (left_type.def_type) {
@@ -2664,6 +2708,13 @@ pub const BinaryNode = struct {
                     codegen.popRegister(),
                     codegen.pushRegister(),
                 );
+
+                if (left_type.def_type != .Bool and left_type.def_type != .Integer and left_type.def_type != .Float) {
+                    try codegen.OP_POP(self.left.location, codegen.pushRegister());
+                    _ = codegen.popRegister();
+                    try codegen.OP_POP(self.left.location, codegen.pushRegister());
+                    _ = codegen.popRegister();
+                }
             },
             .Minus => {
                 if (left_type.def_type != .Integer and left_type.def_type != .Float) {
@@ -2735,7 +2786,6 @@ pub const BinaryNode = struct {
                 );
 
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
-
                 try codegen.patchJump(end_jump, true);
             },
             .Or => {
