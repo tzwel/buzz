@@ -22,7 +22,7 @@ A small/lightweight statically typed scripting language written in Zig
     - LSP (in progress)
     - Debugger and DAP (planned)
     - [TextMate syntax](https://github.com/buzz-language/code)
-- JIT compilation with [MIR](https://github.com/vnmakarov/mir) (turn on with `-Djit`)
+- JIT compilation with [MIR](https://github.com/vnmakarov/mir)
 
 ## Progress
 
