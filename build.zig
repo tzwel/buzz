@@ -212,7 +212,7 @@ pub fn build(b: *Build) !void {
                 bool,
                 "jit",
                 "Turn on JIT engine",
-            ) orelse true,
+            ) orelse false,
             .prof_threshold = b.option(
                 f128,
                 "jit_prof_threshold",
