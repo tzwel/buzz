@@ -84,32 +84,7 @@ fn runFile(allocator: Allocator, file_name: []const u8, args: [][:0]u8, flavor: 
                 codegen_time = timer.read();
                 timer.reset();
 
-                switch (flavor) {
-                    .Run, .Test => try vm.interpret(
-                        function,
-                        args,
-                    ),
-                    .Fmt => {
-                        var formatted = std.ArrayList(u8).init(allocator);
-                        defer formatted.deinit();
-
-                        try function_node.render(function_node, &formatted.writer(), 0);
-
-                        std.debug.print("{s}", .{formatted.items});
-                    },
-                    .Ast => {
-                        var json = std.ArrayList(u8).init(allocator);
-                        defer json.deinit();
-
-                        try function_node.toJson(function_node, &json.writer());
-
-                        var without_nl = try std.mem.replaceOwned(u8, allocator, json.items, "\n", " ");
-                        defer allocator.free(without_nl);
-
-                        _ = try std.io.getStdOut().write(without_nl);
-                    },
-                    else => {},
-                }
+                try vm.interpret(function, args);
 
                 running_time = timer.read();
             } else {
@@ -140,30 +115,28 @@ fn runFile(allocator: Allocator, file_name: []const u8, args: [][:0]u8, flavor: 
                     },
                 );
             }
-        } else {
-            switch (flavor) {
-                .Run, .Test => unreachable,
-                .Fmt => {
-                    var formatted = std.ArrayList(u8).init(allocator);
-                    defer formatted.deinit();
+        } else switch (flavor) {
+            .Run, .Test => unreachable,
+            .Fmt => {
+                var formatted = std.ArrayList(u8).init(allocator);
+                defer formatted.deinit();
 
-                    try function_node.render(function_node, &formatted.writer(), 0);
+                try function_node.render(function_node, &formatted.writer(), 0);
 
-                    std.debug.print("{s}", .{formatted.items});
-                },
-                .Ast => {
-                    var json = std.ArrayList(u8).init(allocator);
-                    defer json.deinit();
+                std.debug.print("{s}", .{formatted.items});
+            },
+            .Ast => {
+                var json = std.ArrayList(u8).init(allocator);
+                defer json.deinit();
 
-                    try function_node.toJson(function_node, &json.writer());
+                try function_node.toJson(function_node, &json.writer());
 
-                    var without_nl = try std.mem.replaceOwned(u8, allocator, json.items, "\n", " ");
-                    defer allocator.free(without_nl);
+                var without_nl = try std.mem.replaceOwned(u8, allocator, json.items, "\n", " ");
+                defer allocator.free(without_nl);
 
-                    _ = try std.io.getStdOut().write(without_nl);
-                },
-                else => {},
-            }
+                _ = try std.io.getStdOut().write(without_nl);
+            },
+            else => {},
         }
     } else {
         return CompileError.Recoverable;

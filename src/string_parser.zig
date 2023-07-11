@@ -125,6 +125,7 @@ pub const StringParser = struct {
         var expr: []const u8 = self.source[self.offset..];
 
         var expr_scanner = Scanner.init(self.parser.gc.allocator, self.parser.script_name, expr);
+        defer expr_scanner.deinit();
         expr_scanner.line_offset = self.line_offset;
         expr_scanner.column_offset = self.column_offset;
 

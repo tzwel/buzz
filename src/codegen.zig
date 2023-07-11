@@ -64,6 +64,10 @@ pub const CodeGen = struct {
 
     pub fn deinit(_: *Self) void {}
 
+    pub inline fn tokenAt(self: *Self, at: usize) Token {
+        return self.parser.scanner.?.tokens[at];
+    }
+
     pub inline fn currentCode(self: *Self) usize {
         return self.current.?.function.?.chunk.code.items.len;
     }
@@ -86,16 +90,16 @@ pub const CodeGen = struct {
         return if (self.had_error) null else function;
     }
 
-    pub fn emit(self: *Self, location: Token, code: u32) !void {
+    pub fn emit(self: *Self, location: usize, code: u32) !void {
         try self.current.?.function.?.chunk.write(code, location);
     }
 
-    pub fn emitTwo(self: *Self, location: Token, a: u8, b: u24) !void {
+    pub fn emitTwo(self: *Self, location: usize, a: u8, b: u24) !void {
         try self.emit(location, (@as(u32, @intCast(a)) << 24) | @as(u32, @intCast(b)));
     }
 
     // OP_ | arg
-    pub fn emitCodeArg(self: *Self, location: Token, code: OpCode, arg: u24) !void {
+    pub fn emitCodeArg(self: *Self, location: usize, code: OpCode, arg: u24) !void {
         try self.emit(
             location,
             (@as(u32, @intCast(@intFromEnum(code))) << 24) | @as(u32, @intCast(arg)),
@@ -103,18 +107,18 @@ pub const CodeGen = struct {
     }
 
     // OP_ | a | b
-    pub fn emitCodeArgs(self: *Self, location: Token, code: OpCode, a: u8, b: u16) !void {
+    pub fn emitCodeArgs(self: *Self, location: usize, code: OpCode, a: u8, b: u16) !void {
         try self.emit(
             location,
             (@as(u32, @intCast(@intFromEnum(code))) << 24) | (@as(u32, @intCast(a)) << 16) | (@as(u32, @intCast(b))),
         );
     }
 
-    pub fn emitOpCode(self: *Self, location: Token, code: OpCode) !void {
+    pub fn emitOpCode(self: *Self, location: usize, code: OpCode) !void {
         try self.emit(location, @as(u32, @intCast(@intFromEnum(code))) << 24);
     }
 
-    pub fn emitLoop(self: *Self, location: Token, loop_start: usize) !void {
+    pub fn emitLoop(self: *Self, location: usize, loop_start: usize) !void {
         const offset: usize = self.currentCode() - loop_start + 1;
         if (offset > 16777215) {
             try self.reportError("Loop body too large.");
@@ -123,7 +127,7 @@ pub const CodeGen = struct {
         try self.emitCodeArg(location, .OP_LOOP, @as(u24, @intCast(offset)));
     }
 
-    pub fn emitJump(self: *Self, location: Token, instruction: OpCode) !usize {
+    pub fn emitJump(self: *Self, location: usize, instruction: OpCode) !usize {
         try self.emitCodeArg(location, instruction, 0xffffff);
 
         return self.currentCode() - 1;
@@ -182,7 +186,7 @@ pub const CodeGen = struct {
 
     pub fn emitList(
         self: *Self,
-        location: Token,
+        location: usize,
     ) !usize {
         try self.emitCodeArg(location, .OP_LIST, 0xffffff);
 
@@ -197,7 +201,7 @@ pub const CodeGen = struct {
             (@as(u32, @intCast(instruction)) << 24) | @as(u32, @intCast(constant));
     }
 
-    pub fn emitMap(self: *Self, location: Token) !usize {
+    pub fn emitMap(self: *Self, location: usize) !usize {
         try self.emitCodeArg(location, .OP_MAP, 0xffffff);
 
         return self.currentCode() - 1;
@@ -211,12 +215,12 @@ pub const CodeGen = struct {
             (@as(u32, @intCast(instruction)) << 24) | @as(u32, @intCast(map_type_constant));
     }
 
-    pub fn emitReturn(self: *Self, location: Token) !void {
+    pub fn emitReturn(self: *Self, location: usize) !void {
         try self.emitOpCode(location, .OP_VOID);
         try self.emitOpCode(location, .OP_RETURN);
     }
 
-    pub fn emitConstant(self: *Self, location: Token, value: Value) !void {
+    pub fn emitConstant(self: *Self, location: usize, value: Value) !void {
         try self.emitCodeArg(location, .OP_CONSTANT, try self.makeConstant(value));
     }
 

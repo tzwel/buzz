@@ -107,14 +107,15 @@ pub const ParseNode = struct {
     node_type: ParseNodeType,
     // If null, either its a statement or its a reference to something unkown that should ultimately raise a compile error
     type_def: ?*ObjTypeDef = null,
-    location: Token = undefined,
-    end_location: Token = undefined,
     // Wether optional jumps must be patch before generate this node bytecode
     patch_opt_jumps: bool = false,
-    docblock: ?Token = null,
-
     // Does this node closes a scope
     ends_scope: ?std.ArrayList(OpCode) = null,
+
+    // Data useful for LSP and renderer
+    location: usize = undefined,
+    end_location: usize = undefined,
+    docblock: ?Token = null,
 
     // Because of https://github.com/ziglang/zig/issues/12325 we can't reference ParseNode in any of those signatures
     toJson: *const fn (*anyopaque, *const std.ArrayList(u8).Writer) RenderError!void = stringify,
@@ -5742,7 +5743,7 @@ pub const ForEachNode = struct {
 
         // Type checking
         if (self.iterable.type_def == null or self.iterable.type_def.?.def_type == .Placeholder) {
-            try codegen.reportErrorAt(self.iterable.location, "Unknown type.");
+            try codegen.reportErrorAt(codegen.tokenAt(self.iterable.location), "Unknown type.");
             try codegen.reportPlaceholder(self.iterable.type_def.?.resolved_type.?.Placeholder);
         } else {
             if (!self.key_omitted) {

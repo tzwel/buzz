@@ -125,7 +125,7 @@ pub const OpCode = enum(u8) {
 pub const Chunk = struct {
     const Self = @This();
 
-    pub const max_constants: u24 = 16777215;
+    pub const max_constants: u24 = std.math.maxInt(u24);
 
     /// List of opcodes to execute
     code: std.ArrayList(u32),
@@ -133,12 +133,15 @@ pub const Chunk = struct {
     lines: std.ArrayList(Token),
     /// List of constants defined in this chunk
     constants: std.ArrayList(Value),
+    /// Tokens
+    tokens: []Token,
 
-    pub fn init(allocator: Allocator) Self {
+    pub fn init(allocator: Allocator, tokens: []Token) Self {
         return Self{
             .code = std.ArrayList(u32).init(allocator),
             .constants = std.ArrayList(Value).init(allocator),
             .lines = std.ArrayList(Token).init(allocator),
+            .tokens = tokens,
         };
     }
 
@@ -148,9 +151,9 @@ pub const Chunk = struct {
         self.lines.deinit();
     }
 
-    pub fn write(self: *Self, code: u32, where: Token) !void {
+    pub fn write(self: *Self, code: u32, where: usize) !void {
         _ = try self.code.append(code);
-        _ = try self.lines.append(where);
+        _ = try self.lines.append(self.tokens[where]);
     }
 
     pub fn addConstant(self: *Self, vm: ?*VM, value: Value) !u24 {

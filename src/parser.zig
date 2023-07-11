@@ -358,6 +358,9 @@ pub const Parser = struct {
         .{ .prefix = resolveFiber, .infix = null, .precedence = .Primary }, // resolve
         .{ .prefix = yield, .infix = null, .precedence = .Primary }, // yield
         .{ .prefix = null, .infix = range, .precedence = .Primary }, // ..
+        .{ .prefix = null, .infix = null, .precedence = .None }, // |
+        .{ .prefix = null, .infix = null, .precedence = .None }, // \n
+        .{ .prefix = null, .infix = null, .precedence = .None }, // #!
     };
 
     pub const ScriptImport = struct {
@@ -404,6 +407,7 @@ pub const Parser = struct {
         }
 
         self.scanner = Scanner.init(self.gc.allocator, file_name, source);
+        defer self.scanner.?.deinit();
 
         const function_type: FunctionType = if (self.imported) .Script else .ScriptEntryPoint;
         var function_node = try self.gc.allocator.create(FunctionNode);
@@ -4966,6 +4970,7 @@ pub const Parser = struct {
 
     pub fn parseTypeDefFrom(self: *Self, source: []const u8) anyerror!*ObjTypeDef {
         var type_scanner = Scanner.init(self.gc.allocator, self.script_name, source);
+        defer type_scanner.deinit();
         // Replace parser scanner with one that only looks at that substring
         const scanner = self.scanner;
         self.scanner = type_scanner;
