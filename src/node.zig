@@ -98,6 +98,7 @@ pub const ParseNodeType = enum(u8) {
     Import,
     Try,
     Range,
+    Guard,
 };
 
 pub const RenderError = Allocator.Error || std.fmt.BufPrintError;
@@ -5346,6 +5347,121 @@ pub const InlineIfNode = struct {
     pub fn cast(nodePtr: *anyopaque) ?*Self {
         var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
         if (node.node_type != .InlineIf) {
+            return null;
+        }
+
+        return @fieldParentPtr(Self, "node", node);
+    }
+};
+
+pub const GuardNode = struct {
+    const Self = @This();
+
+    node: ParseNode = .{
+        .node_type = .Guard,
+        .toJson = stringify,
+        .toByteCode = generate,
+        .toValue = val,
+        .isConstant = constant,
+        .render = render,
+    },
+
+    condition: *ParseNode,
+    unwrapped_identifier: Token,
+    else_branch: *ParseNode,
+
+    fn constant(_: *anyopaque) bool {
+        return false;
+    }
+
+    fn val(_: *anyopaque, _: *GarbageCollector) anyerror!Value {
+        return GenError.NotConstant;
+    }
+
+    fn generate(nodePtr: *anyopaque, codegenPtr: *anyopaque, breaks: ?*std.ArrayList(usize)) anyerror!?*ObjFunction {
+        const codegen: *CodeGen = @ptrCast(@alignCast(codegenPtr));
+        const node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+
+        if (node.synchronize(codegen)) {
+            return null;
+        }
+
+        const self = Self.cast(node).?;
+
+        if (self.condition.type_def == null or self.condition.type_def.?.def_type == .Placeholder) {
+            try codegen.reportPlaceholder(self.condition.type_def.?.resolved_type.?.Placeholder);
+        }
+
+        if (!self.condition.type_def.?.optional) {
+            try codegen.reportErrorAt(self.condition.location, "Expected optional");
+        }
+
+        _ = try self.condition.toByteCode(self.condition, codegen, breaks);
+        try codegen.emitOpCode(self.condition.location, .OP_COPY);
+        try codegen.emitOpCode(self.condition.location, .OP_NULL);
+        try codegen.emitOpCode(self.condition.location, .OP_EQUAL);
+
+        const then_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP_IF_FALSE);
+        try codegen.emitOpCode(self.node.location, .OP_POP); // pop condition
+        try codegen.emitOpCode(self.node.location, .OP_POP); // pop unwrapped value
+
+        _ = try self.else_branch.toByteCode(self.else_branch, codegen, breaks);
+
+        const else_jump: usize = try codegen.emitJump(self.node.location, .OP_JUMP);
+
+        try codegen.patchJump(then_jump);
+        try codegen.emitOpCode(self.node.location, .OP_POP);
+
+        try codegen.patchJump(else_jump);
+
+        try node.patchOptJumps(codegen);
+        try node.endScope(codegen);
+
+        return null;
+    }
+
+    fn stringify(nodePtr: *anyopaque, out: *const std.ArrayList(u8).Writer) RenderError!void {
+        var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        var self = Self.cast(node).?;
+
+        try out.writeAll("{\"node\": \"Guard\", \"condition\": ");
+
+        try self.condition.toJson(self.condition, out);
+
+        try out.writeAll(", \"else_branch\": ");
+
+        try self.else_branch.toJson(self.else_branch, out);
+
+        try out.writeAll(", ");
+
+        try ParseNode.stringify(node, out);
+
+        try out.writeAll("}");
+    }
+
+    fn render(nodePtr: *anyopaque, out: *const std.ArrayList(u8).Writer, depth: usize) RenderError!void {
+        const node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        const self = Self.cast(node).?;
+
+        try out.writeByteNTimes(' ', depth * 4);
+
+        try out.writeAll("guard (");
+        try self.condition.render(self.condition, out, depth);
+        try out.print(" -> {s}", .{self.unwrapped_identifier.lexeme});
+
+        try out.writeAll(") else {\n");
+        try self.else_branch.render(self.else_branch, out, depth + 1);
+        try out.writeByteNTimes(' ', depth * 4);
+        try out.writeAll("}\n\n");
+    }
+
+    pub fn toNode(self: *Self) *ParseNode {
+        return &self.node;
+    }
+
+    pub fn cast(nodePtr: *anyopaque) ?*Self {
+        var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        if (node.node_type != .Guard) {
             return null;
         }
 

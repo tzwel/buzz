@@ -991,6 +991,7 @@ fn generateNode(self: *Self, node: *n.ParseNode) Error!?m.MIR_op_t {
         .NamedVariable => try self.generateNamedVariable(n.NamedVariableNode.cast(node).?),
         .Return => try self.generateReturn(n.ReturnNode.cast(node).?),
         .If => try self.generateIf(n.IfNode.cast(node).?),
+        .Guard => try self.generateGuard(n.GuardNode.cast(node).?),
         .Binary => try self.generateBinary(n.BinaryNode.cast(node).?),
         .While => try self.generateWhile(n.WhileNode.cast(node).?),
         .DoUntil => try self.generateDoUntil(n.DoUntilNode.cast(node).?),
@@ -1676,6 +1677,46 @@ fn generateReturn(self: *Self, return_node: *n.ReturnNode) Error!?m.MIR_op_t {
     return null;
 }
 
+fn generateGuard(self: *Self, guard_node: *n.GuardNode) Error!?m.MIR_op_t {
+    // Generate condition
+    const condition_value = (try self.generateNode(guard_node.condition)).?;
+    const condition = m.MIR_new_reg_op(
+        self.ctx,
+        try self.REG("condition", m.MIR_T_I64),
+    );
+
+    try self.buildExternApiCall(
+        .bz_valueEqual,
+        condition,
+        &[_]m.MIR_op_t{
+            condition_value,
+            m.MIR_new_uint_op(self.ctx, v.Value.Null.val),
+        },
+    );
+
+    const null_label = m.MIR_new_label(self.ctx);
+    const out_label = m.MIR_new_label(self.ctx);
+
+    self.BEQ(
+        m.MIR_new_label_op(self.ctx, null_label),
+        condition,
+        m.MIR_new_uint_op(self.ctx, v.Value.True.val),
+    );
+
+    // Unwrapped value is a new local
+    try self.buildPush(condition_value);
+
+    self.JMP(out_label);
+
+    self.append(null_label);
+
+    _ = try self.generateNode(guard_node.else_branch);
+
+    self.append(out_label);
+
+    return null;
+}
+
 fn generateIf(self: *Self, if_node: *n.IfNode) Error!?m.MIR_op_t {
     const constant_condition = if (if_node.condition.isConstant(if_node.condition) and if_node.unwrapped_identifier == null and if_node.casted_type == null)
         if_node.condition.toValue(if_node.condition, self.vm.gc) catch unreachable
@@ -1703,6 +1744,7 @@ fn generateIf(self: *Self, if_node: *n.IfNode) Error!?m.MIR_op_t {
             },
         );
 
+        // FIXME: converstion to 0/1 is useless
         const true_label = m.MIR_new_label(self.ctx);
         const out_label = m.MIR_new_label(self.ctx);
 

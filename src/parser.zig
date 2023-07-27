@@ -81,6 +81,7 @@ const BreakNode = _node.BreakNode;
 const ContinueNode = _node.ContinueNode;
 const IfNode = _node.IfNode;
 const InlineIfNode = _node.InlineIfNode;
+const GuardNode = _node.GuardNode;
 const ReturnNode = _node.ReturnNode;
 const ForNode = _node.ForNode;
 const ForEachNode = _node.ForEachNode;
@@ -391,6 +392,7 @@ pub const Parser = struct {
         .{ .prefix = yield, .infix = null, .precedence = .Primary }, // yield
         .{ .prefix = null, .infix = range, .precedence = .Primary }, // ..
         .{ .prefix = null, .infix = null, .precedence = .None }, // Any
+        .{ .prefix = null, .infix = null, .precedence = .None }, // guard
     };
 
     pub const ScriptImport = struct {
@@ -1408,6 +1410,9 @@ pub const Parser = struct {
         if (try self.match(.If)) {
             assert(!hanging);
             return try self.ifStatement(loop_scope);
+        } else if (try self.match(.Guard)) {
+            assert(!hanging);
+            return try self.guardStatement(loop_scope);
         } else if (try self.match(.For)) {
             assert(!hanging);
             return try self.forStatement();
@@ -1890,6 +1895,59 @@ pub const Parser = struct {
         node.node.end_location = self.parser.previous_token.?;
         // Continue only close body scope and not foreach/for loop variables
         node.node.ends_scope = try self.closeScope(loop_scope.?.loop_body_scope);
+
+        return &node.node;
+    }
+
+    fn guardStatement(self: *Self, loop_scope: ?LoopScope) !*ParseNode {
+        const start_location = self.parser.previous_token.?;
+
+        try self.consume(.LeftParen, "Expected `(` after `guard`.");
+
+        const condition: *ParseNode = try self.expression(false);
+
+        try self.consume(.Arrow, "Expected `->` after expression.");
+
+        _ = try self.parseVariable(
+            try condition.type_def.?.cloneNonOptional(&self.gc.type_registry),
+            true,
+            "Expected optional unwrap identifier",
+        );
+        self.markInitialized();
+
+        const unwrapped_identifier = self.parser.previous_token.?;
+
+        try self.consume(.RightParen, "Expected `)` after `guard` condition.");
+        try self.consume(.Else, "Expected `else` after `guard` condition.");
+
+        self.beginScope();
+        try self.consume(.LeftBrace, "Expected `{` after `else`.");
+        const else_branch = try self.block(loop_scope);
+
+        // Ensure else_branch last statement breaks out of current scope
+        const else_block = BlockNode.cast(else_branch).?;
+        if (else_block.statements.getLastOrNull()) |stmt| {
+            // TODO: checking the last statement is not enough, use the same logic as what we do to detect a missing `return`
+            if (stmt.node_type != .Return and stmt.node_type != .Throw and (loop_scope == null or (stmt.node_type != .Break and stmt.node_type != .Continue))) {
+                try self.reportErrorAt(
+                    stmt.location,
+                    "guard else block should end with a statement that breaks out of the current scope (`returnt`, `break`, `continue` or `throw`).",
+                );
+            }
+        } else {
+            try self.reportErrorAt(else_block.node.location, "guard else block should at least have one statement");
+        }
+
+        else_branch.ends_scope = try self.endScope();
+
+        var node = try self.gc.allocator.create(GuardNode);
+        node.* = GuardNode{
+            .condition = condition,
+            .else_branch = else_branch,
+            .unwrapped_identifier = unwrapped_identifier,
+        };
+        node.node.location = start_location;
+        node.node.end_location = self.parser.previous_token.?;
 
         return &node.node;
     }

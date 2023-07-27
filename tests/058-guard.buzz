@@ -1,0 +1,31 @@
+import "std";
+
+fun testMe(str? maybe) > str? {
+    guard (maybe -> msg) else {
+        return null;
+    }
+
+    print(msg);
+    return msg;
+}
+
+fun testMeLoop(str? maybe) > str? {
+    while (true) {
+        guard (maybe -> msg) else {
+            break;
+        }
+
+        print(msg);
+        return msg;
+    }
+
+    return null;
+}
+
+test "guard" {
+    assert(testMe("hello") == "hello", message: "guard");
+    assert(testMe(null) == null, message: "guard");
+
+    assert(testMeLoop("hello") == "hello", message: "guard");
+    assert(testMeLoop(null) == null, message: "guard");
+}

@@ -177,6 +177,7 @@ pub const TokenType = enum {
     Yield, // yield
     Spread, // ..
     Any, // any
+    Guard, // guard
 };
 
 pub const keywords = std.ComptimeStringMap(TokenType, .{
@@ -229,4 +230,5 @@ pub const keywords = std.ComptimeStringMap(TokenType, .{
     .{ "resolve", .Resolve },
     .{ "yield", .Yield },
     .{ "any", .Any },
+    .{ "guard", .Guard },
 });
