@@ -1,9 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const is_wasm = builtin.cpu.arch.isWasm();
 const assert = std.debug.assert;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const StringHashMap = std.StringHashMap;
+
 const Chunk = @import("./chunk.zig").Chunk;
 const _vm = @import("./vm.zig");
 const VM = _vm.VM;
@@ -21,7 +23,7 @@ const _node = @import("./node.zig");
 const FunctionNode = _node.FunctionNode;
 const buzz_builtin = @import("./builtin.zig");
 
-pub const pcre = @import("./pcre.zig").pcre;
+pub const pcre = if (!is_wasm) @import("./pcre.zig").pcre else void;
 
 const Value = _value.Value;
 const ValueType = _value.ValueType;
@@ -293,7 +295,7 @@ pub const pcre_struct = switch (builtin.os.tag) {
     .linux, .windows => pcre.pcre,
     .freebsd, .openbsd => pcre.struct_real_pcre,
     .macos, .tvos, .watchos, .ios => pcre.struct_real_pcre8_or_16,
-    else => unreachable,
+    else => void,
 };
 
 // Patterns are pcre regex, @see https://www.pcre.org/original/doc/html/index.html

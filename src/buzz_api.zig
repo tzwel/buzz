@@ -41,6 +41,10 @@ const Parser = _parser.Parser;
 const CodeGen = _codegen.CodeGen;
 const GarbageCollector = memory.GarbageCollector;
 
+const is_wasm = builtin.cpu.arch.isWasm();
+
+pub const os = @import("./main.zig").os;
+
 var gpa = std.heap.GeneralPurposeAllocator(.{
     .safety = true,
 }){};
@@ -870,40 +874,48 @@ export fn bz_valueIs(self: Value, type_def: Value) Value {
 }
 
 export fn bz_setTryCtx(self: *VM) *TryCtx {
-    var try_ctx = self.gc.allocator.create(TryCtx) catch @panic("Could not create try context");
-    try_ctx.* = .{
-        .previous = self.current_fiber.try_context,
-        .env = undefined,
-    };
+    if (BuildOptions.jit) {
+        var try_ctx = self.gc.allocator.create(TryCtx) catch @panic("Could not create try context");
+        try_ctx.* = .{
+            .previous = self.current_fiber.try_context,
+            .env = undefined,
+        };
 
-    self.current_fiber.try_context = try_ctx;
+        self.current_fiber.try_context = try_ctx;
 
-    // Doesn't setjmp itself so it is done in the correct function context
+        // Doesn't setjmp itself so it is done in the correct function context
 
-    return try_ctx;
+        return try_ctx;
+    }
+
+    unreachable;
 }
 
 export fn bz_popTryCtx(self: *VM) void {
-    if (self.current_fiber.try_context) |try_ctx| {
-        self.current_fiber.try_context = try_ctx.previous;
+    if (BuildOptions.jit) {
+        if (self.current_fiber.try_context) |try_ctx| {
+            self.current_fiber.try_context = try_ctx.previous;
 
-        self.gc.allocator.destroy(try_ctx);
+            self.gc.allocator.destroy(try_ctx);
+        }
     }
 }
 
 // Like bz_throw but assumes the error payload is already on the stack
 export fn bz_rethrow(vm: *VM) void {
-    // Are we in a JIT compiled function and within a try-catch?
-    if ((vm.currentFrame() == null or vm.currentFrame().?.in_native_call) and vm.current_fiber.try_context != null) {
-        // FIXME: close try scope
+    if (BuildOptions.jit) {
+        // Are we in a JIT compiled function and within a try-catch?
+        if ((vm.currentFrame() == null or vm.currentFrame().?.in_native_call) and vm.current_fiber.try_context != null) {
+            // FIXME: close try scope
 
-        if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.windows) {
-            jmp._longjmp(&vm.current_fiber.try_context.?.env, 1);
-        } else {
-            jmp.longjmp(&vm.current_fiber.try_context.?.env, 1);
+            if (builtin.os.tag == .macos or builtin.os.tag == .linux or (!is_wasm and builtin.os.windows)) {
+                jmp._longjmp(&vm.current_fiber.try_context.?.env, 1);
+            } else {
+                jmp.longjmp(&vm.current_fiber.try_context.?.env, 1);
+            }
+
+            unreachable;
         }
-
-        unreachable;
     }
 }
 
@@ -948,7 +960,9 @@ export fn bz_context(ctx: *NativeCtx, closure_value: Value, new_ctx: *NativeCtx,
     };
 
     if (closure != null and closure.?.function.native_raw == null and closure.?.function.native == null) {
-        ctx.vm.mir_jit.?.compileFunction(closure.?) catch @panic("Failed compiling function");
+        if (!is_wasm) {
+            ctx.vm.mir_jit.?.compileFunction(closure.?) catch @panic("Failed compiling function");
+        }
     }
 
     return if (closure) |cls| cls.function.native_raw.? else native.?.native;
@@ -977,7 +991,9 @@ export fn bz_closure(
     // On stack to prevent collection
     ctx.vm.push(closure.toValue());
 
-    ctx.vm.mir_jit.?.compiled_closures.put(closure, {}) catch @panic("Could not get closure");
+    if (BuildOptions.jit) {
+        ctx.vm.mir_jit.?.compiled_closures.put(closure, {}) catch @panic("Could not get closure");
+    }
 
     var it = function_node.upvalue_binding.iterator();
     while (it.next()) |kv| {

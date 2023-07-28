@@ -81,10 +81,7 @@ const BuzzBuildOptions = struct {
         // mir can be built with musl libc
         // mimalloc can be built with musl libc
         // longjmp/setjmp need to be removed
-        if (self.target.isLinux()) {
-            return true;
-        }
-        return self.use_mimalloc;
+        return self.target.isLinux() or self.use_mimalloc;
     }
 };
 
@@ -102,6 +99,7 @@ pub fn build(b: *Build) !void {
 
     const build_mode = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
+    const is_wasm = if (target.cpu_arch) |arch| arch.isWasm() else false;
     const install_step = b.getInstallStep();
 
     var build_options = BuzzBuildOptions{
@@ -145,7 +143,7 @@ pub fn build(b: *Build) !void {
             }).stdout,
             "\n \t",
         ),
-        .use_mimalloc = b.option(
+        .use_mimalloc = !is_wasm and b.option(
             bool,
             "use_mimalloc",
             "Use mimalloc allocator",
@@ -225,12 +223,12 @@ pub fn build(b: *Build) !void {
                 "debug_jit",
                 "Show debug information for the JIT engine",
             ) orelse false,
-            .always_on = b.option(
+            .always_on = !is_wasm and b.option(
                 bool,
                 "jit_always_on",
                 "JIT engine will compile any function encountered",
             ) orelse false,
-            .on = b.option(
+            .on = !is_wasm and b.option(
                 bool,
                 "jit",
                 "Turn on JIT engine",
@@ -250,12 +248,11 @@ pub fn build(b: *Build) !void {
     var llibs = std.ArrayList([]const u8).init(b.allocator);
     defer llibs.deinit();
 
-    sys_libs.appendSlice(
-        &[_][]const u8{
-            "mir",
-            "pcre",
-        },
-    ) catch unreachable;
+    sys_libs.append("pcre") catch unreachable;
+    if (!is_wasm) {
+        sys_libs.append("mir") catch unreachable;
+    }
+
     if (build_options.use_mimalloc) {
         sys_libs.append("mimalloc") catch unreachable;
     }
@@ -269,18 +266,21 @@ pub fn build(b: *Build) !void {
     llibs.appendSlice(&[_][]const u8{
         "/usr/local/lib",
         "/usr/lib",
-        "mir",
     }) catch unreachable;
+
+    if (!is_wasm) {
+        llibs.append("mir") catch unreachable;
+    }
 
     // If macOS, add homebrew paths
     if (builtin.os.tag == .macos) {
         const prefix = std.os.getenv("HOMEBREW_PREFIX") orelse "/opt/homebrew";
-        
+
         var include = std.ArrayList(u8).init(b.allocator);
-        include.writer().print("{s}{s}include", .{prefix, std.fs.path.sep_str}) catch unreachable;
-        
+        include.writer().print("{s}{s}include", .{ prefix, std.fs.path.sep_str }) catch unreachable;
+
         var lib = std.ArrayList(u8).init(b.allocator);
-        lib.writer().print("{s}{s}lib", .{prefix, std.fs.path.sep_str}) catch unreachable;
+        lib.writer().print("{s}{s}lib", .{ prefix, std.fs.path.sep_str }) catch unreachable;
 
         includes.append(include.items) catch unreachable;
         llibs.append(lib.items) catch unreachable;
@@ -360,6 +360,7 @@ pub fn build(b: *Build) !void {
         "src/lib/buzz_crypto.zig",
         "src/lib/buzz_http.zig",
     };
+
     // Zig only libs
     const lib_names = [_][]const u8{
         "std",
@@ -373,6 +374,7 @@ pub fn build(b: *Build) !void {
         "crypto",
         "http",
     };
+
     const all_lib_names = [_][]const u8{
         "std",
         "io",
@@ -388,10 +390,23 @@ pub fn build(b: *Build) !void {
         "errors",
     };
 
+    const wasm_excluded = std.ComptimeStringMap(
+        void,
+        .{
+            .{ "io", void },
+            .{ "os", void },
+            .{ "fs", void },
+        },
+    );
+
     // TODO: this section is slow. Modifying Buzz parser shouldn't trigger recompile of all buzz dynamic libraries
 
     var libs = [_]*std.build.LibExeObjStep{undefined} ** lib_names.len;
     for (lib_paths, 0..) |lib_path, index| {
+        if (is_wasm and wasm_excluded.get(lib_names[index]) != null) {
+            continue;
+        }
+
         var std_lib = b.addSharedLibrary(.{
             .name = lib_names[index],
             .root_source_file = Build.FileSource.relative(lib_path),
@@ -431,7 +446,13 @@ pub fn build(b: *Build) !void {
     }
 
     for (all_lib_names) |name| {
-        const step = b.addInstallLibFile(std.build.FileSource.relative(b.fmt("src/lib/{s}.buzz", .{name})), b.fmt("buzz/{s}.buzz", .{name}));
+        const step = b.addInstallLibFile(
+            std.build.FileSource.relative(b.fmt("src/lib/{s}.buzz", .{name})),
+            b.fmt(
+                "buzz/{s}.buzz",
+                .{name},
+            ),
+        );
         install_step.dependOn(&step.step);
     }
 

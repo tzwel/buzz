@@ -1,10 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const is_wasm = builtin.cpu.arch.isWasm();
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
-pub const pcre = @import("./pcre.zig").pcre;
+pub const pcre = if (!is_wasm) @import("./pcre.zig").pcre else void;
 
 const _obj = @import("./obj.zig");
 const _node = @import("./node.zig");
@@ -3229,33 +3230,42 @@ pub const Parser = struct {
 
         var node = try self.gc.allocator.create(PatternNode);
 
+        var reg: ?*_obj.pcre_struct = null;
+
         const source_slice = self.parser.previous_token.?.literal_string.?;
         // Replace escaped pattern delimiter with delimiter
         const source_slice_clean = try std.mem.replaceOwned(u8, self.gc.allocator, source_slice, "__", "_");
         const source = try self.gc.allocator.dupeZ(u8, source_slice_clean);
 
-        var err = try self.gc.allocator.allocSentinel(u8, 1000, 0);
-        // FIXME: crashes i don't know why
-        // defer self.gc.allocator.free(err);
-        var err_offset: c_int = undefined;
-        const reg: ?*_obj.pcre_struct = pcre.pcre_compile(
-            @as([*c]const u8, @ptrCast(source)), // pattern
-            0, // options
-            @as([*c][*c]const u8, @ptrCast(&err)), // error message buffer
-            &err_offset, // offset at which error occured
-            null, // extra ?
-        );
+        if (!is_wasm) {
+            var err = try self.gc.allocator.allocSentinel(u8, 1000, 0);
+            // FIXME: crashes i don't know why
+            // defer self.gc.allocator.free(err);
+            var err_offset: c_int = undefined;
+            reg = pcre.pcre_compile(
+                @as([*c]const u8, @ptrCast(source)), // pattern
+                0, // options
+                @as([*c][*c]const u8, @ptrCast(&err)), // error message buffer
+                &err_offset, // offset at which error occured
+                null, // extra ?
+            );
 
-        if (reg == null) {
-            try self.reportErrorFmt("Could not compile pattern, error at {}: {s}", .{ err_offset, err });
-            return CompileError.Unrecoverable;
+            if (reg == null) {
+                try self.reportErrorFmt("Could not compile pattern, error at {}: {s}", .{ err_offset, err });
+                return CompileError.Unrecoverable;
+            }
+        } else {
+            try self.reportErrorAt(
+                start_location,
+                "This version of buzz was built for WASM and does not support PCRE regexes (see https://github.com/buzz-language/buzz/issues/142)",
+            );
         }
 
         var constant = try self.gc.allocateObject(
             ObjPattern,
             .{
                 .source = source_slice_clean,
-                .pattern = reg.?,
+                .pattern = reg orelse undefined,
             },
         );
 

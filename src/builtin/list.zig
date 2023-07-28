@@ -93,8 +93,7 @@ pub fn remove(ctx: *NativeCtx) c_int {
 
     ctx.vm.push(list.items.orderedRemove(@as(usize, @intCast(list_index.?))));
     ctx.vm.gc.markObjDirty(&list.obj) catch {
-        std.debug.print("Could not remove from list", .{});
-        std.os.exit(1);
+        @panic("Could not remove from list");
     };
 
     return 1;

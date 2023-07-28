@@ -1,6 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const is_wasm = builtin.cpu.arch.isWasm();
 const assert = std.debug.assert;
+const dispatch_call_modifier: std.builtin.CallModifier = if (!is_wasm) .always_inline else .auto;
+
 const _value = @import("./value.zig");
 const _chunk = @import("./chunk.zig");
 const _disassembler = @import("./disassembler.zig");
@@ -11,7 +14,7 @@ const BuildOptions = @import("build_options");
 const _memory = @import("./memory.zig");
 const GarbageCollector = _memory.GarbageCollector;
 const TypeRegistry = _memory.TypeRegistry;
-const MIRJIT = @import("mirjit.zig");
+const MIRJIT = if (!is_wasm) @import("mirjit.zig") else void;
 const Token = @import("./token.zig").Token;
 
 const Value = _value.Value;
@@ -77,11 +80,14 @@ pub const CallFrame = struct {
     native_call_error_value: ?Value = null,
 };
 
-pub const TryCtx = extern struct {
-    previous: ?*TryCtx,
-    env: jmp.jmp_buf = undefined,
-    // FIXME: remember top here
-};
+pub const TryCtx = if (!is_wasm)
+    extern struct {
+        previous: ?*TryCtx,
+        env: jmp.jmp_buf = undefined,
+        // FIXME: remember top here
+    }
+else
+    void;
 
 pub const Fiber = struct {
     const Self = @This();
@@ -313,7 +319,7 @@ pub const VM = struct {
         FiberOver,
         BadNumber,
         Custom, // TODO: remove when user can use this set directly in buzz code
-    } || Allocator.Error || std.fmt.BufPrintError;
+    } || Allocator.Error || std.fmt.BufPrintError || if (!is_wasm) VM.Error else error{};
 
     gc: *GarbageCollector,
     current_fiber: *Fiber,
@@ -458,7 +464,7 @@ pub const VM = struct {
         return self.currentFrame().?.closure.globals;
     }
 
-    pub fn interpret(self: *Self, function: *ObjFunction, args: ?[][:0]u8) MIRJIT.Error!void {
+    pub fn interpret(self: *Self, function: *ObjFunction, args: ?[][:0]u8) VM.Error!void {
         self.current_fiber.* = try Fiber.init(
             self.gc.allocator,
             null, // parent fiber
@@ -685,7 +691,7 @@ pub const VM = struct {
 
         // Tail call
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             op_table[@intFromEnum(instruction)],
             .{
                 self,
@@ -709,7 +715,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -726,7 +732,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -743,7 +749,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -760,7 +766,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -777,7 +783,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -794,7 +800,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -807,14 +813,11 @@ pub const VM = struct {
     }
 
     fn OP_CLONE(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        self.clone() catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.clone() catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -831,7 +834,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -844,17 +847,14 @@ pub const VM = struct {
     }
 
     fn OP_DEFINE_GLOBAL(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
-        self.globals.ensureTotalCapacity(arg + 1) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.globals.ensureTotalCapacity(arg + 1) catch @panic("Out of memory");
         self.globals.expandToCapacity();
         self.globals.items[arg] = self.peek(0);
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -871,7 +871,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -888,7 +888,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -905,7 +905,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -922,7 +922,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -939,7 +939,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -956,7 +956,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -973,7 +973,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -986,23 +986,17 @@ pub const VM = struct {
     }
 
     fn OP_TO_STRING(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const str = valueToStringAlloc(self.gc.allocator, self.pop()) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        const str = valueToStringAlloc(self.gc.allocator, self.pop()) catch @panic("Out of memory");
         self.push(
             Value.fromObj(
-                (self.gc.copyString(str.items) catch |e| {
-                    panic(e);
-                    unreachable;
-                }).toObj(),
+                (self.gc.copyString(str.items) catch @panic("Out of memory")).toObj(),
             ),
         );
         str.deinit();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1025,7 +1019,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1041,14 +1035,8 @@ pub const VM = struct {
         var function: *ObjFunction = self.readConstant(arg).obj().access(ObjFunction, .Function, self.gc).?;
         var closure: *ObjClosure = self.gc.allocateObject(
             ObjClosure,
-            ObjClosure.init(self.gc.allocator, self, function) catch |e| {
-                panic(e);
-                unreachable;
-            },
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+            ObjClosure.init(self.gc.allocator, self, function) catch @panic("Out of memory"),
+        ) catch @panic("Out of memory");
 
         self.push(closure.toValue());
 
@@ -1058,24 +1046,15 @@ pub const VM = struct {
             var index: u8 = self.readByte();
 
             if (is_local) {
-                closure.upvalues.append(self.captureUpvalue(&(current_frame.slots[index])) catch |e| {
-                    panic(e);
-                    unreachable;
-                }) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                closure.upvalues.append(self.captureUpvalue(&(current_frame.slots[index])) catch @panic("Out of memory")) catch @panic("Out of memory");
             } else {
-                closure.upvalues.append(current_frame.closure.upvalues.items[index]) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                closure.upvalues.append(current_frame.closure.upvalues.items[index]) catch @panic("Out of memory");
             }
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1093,7 +1072,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1113,10 +1092,7 @@ pub const VM = struct {
         const stack_len = arg_count + catch_count + 1;
         const stack_slice = stack_ptr[0..stack_len];
 
-        var fiber = self.gc.allocator.create(Fiber) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var fiber = self.gc.allocator.create(Fiber) catch @panic("Out of memory");
         fiber.* = Fiber.init(
             self.gc.allocator,
             self.current_fiber,
@@ -1125,10 +1101,7 @@ pub const VM = struct {
             arg_count,
             catch_count > 0,
             null,
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         // Pop arguments and catch clauses
         self.current_fiber.stack_top = self.current_fiber.stack_top - stack_len;
@@ -1139,16 +1112,13 @@ pub const VM = struct {
         var obj_fiber = self.gc.allocateObject(ObjFiber, ObjFiber{
             .fiber = fiber,
             .type_def = type_def,
-        }) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        }) catch @panic("Out of memory");
 
         self.push(obj_fiber.toValue());
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1170,10 +1140,7 @@ pub const VM = struct {
         const stack_len = arg_count + catch_count + 1;
         const stack_slice = stack_ptr[0..stack_len];
 
-        var fiber = self.gc.allocator.create(Fiber) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var fiber = self.gc.allocator.create(Fiber) catch @panic("Out of memory");
         fiber.* = Fiber.init(
             self.gc.allocator,
             self.current_fiber,
@@ -1182,10 +1149,7 @@ pub const VM = struct {
             arg_count,
             catch_count > 0,
             method,
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         // Pop arguments and catch clauses
         self.current_fiber.stack_top = self.current_fiber.stack_top - stack_len;
@@ -1196,16 +1160,13 @@ pub const VM = struct {
         var obj_fiber = self.gc.allocateObject(ObjFiber, ObjFiber{
             .fiber = fiber,
             .type_def = type_def,
-        }) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        }) catch @panic("Out of memory");
 
         self.push(obj_fiber.toValue());
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1219,14 +1180,11 @@ pub const VM = struct {
 
     fn OP_RESUME(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         const obj_fiber = self.pop().obj().access(ObjFiber, .Fiber, self.gc).?;
-        obj_fiber.fiber.resume_(self) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        obj_fiber.fiber.resume_(self) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1240,14 +1198,11 @@ pub const VM = struct {
 
     fn OP_RESOLVE(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         const obj_fiber = self.pop().obj().access(ObjFiber, .Fiber, self.gc).?;
-        obj_fiber.fiber.resolve_(self) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        obj_fiber.fiber.resolve_(self) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1264,7 +1219,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1288,14 +1243,11 @@ pub const VM = struct {
             arg_count,
             catch_value,
             false,
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1321,20 +1273,14 @@ pub const VM = struct {
         if (instance.fields.get(method)) |field| {
             (self.current_fiber.stack_top - arg_count - 1)[0] = field;
 
-            self.callValue(field, arg_count, catch_value, false) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.callValue(field, arg_count, catch_value, false) catch @panic("Out of memory");
         } else {
-            self.invokeFromObject(instance.object.?, method, arg_count, catch_value, false) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.invokeFromObject(instance.object.?, method, arg_count, catch_value, false) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1353,21 +1299,15 @@ pub const VM = struct {
         const catch_count: u24 = @intCast(0x00ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
-        const member = (ObjString.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (ObjString.member(self, method) catch @panic("Out of memory")).?;
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
 
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(member_value, arg_count, catch_value, false) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1386,21 +1326,15 @@ pub const VM = struct {
         const catch_count: u24 = @intCast(0x00ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
-        const member = (ObjPattern.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (ObjPattern.member(self, method) catch @panic("Out of memory")).?;
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
 
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(member_value, arg_count, catch_value, false) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1419,20 +1353,14 @@ pub const VM = struct {
         const catch_count: u24 = @intCast(0x00ffffff & arg_instruction);
         const catch_value = if (catch_count > 0) self.pop() else null;
 
-        const member = (ObjFiber.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (ObjFiber.member(self, method) catch @panic("Out of memory")).?;
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(member_value, arg_count, catch_value, false) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1452,21 +1380,15 @@ pub const VM = struct {
         const catch_value = if (catch_count > 0) self.pop() else null;
 
         const list = self.peek(arg_count).obj().access(ObjList, .List, self.gc).?;
-        const member = (list.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (list.member(self, method) catch @panic("Out of memory")).?;
 
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(member_value, arg_count, catch_value, false) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1486,21 +1408,15 @@ pub const VM = struct {
         const catch_value = if (catch_count > 0) self.pop() else null;
 
         const map = self.peek(arg_count).obj().access(ObjMap, .Map, self.gc).?;
-        const member = (map.member(self, method) catch |e| {
-            panic(e);
-            unreachable;
-        }).?;
+        const member = (map.member(self, method) catch @panic("Out of memory")).?;
 
         var member_value: Value = member.toValue();
         (self.current_fiber.stack_top - arg_count - 1)[0] = member_value;
-        self.callValue(member_value, arg_count, catch_value, false) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.callValue(member_value, arg_count, catch_value, false) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1527,10 +1443,7 @@ pub const VM = struct {
         if (self.current_fiber.frame_count == 0) {
             // We're in a fiber
             if (self.current_fiber.parent_fiber != null) {
-                self.current_fiber.finish(self, result) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                self.current_fiber.finish(self, result) catch @panic("Out of memory");
 
                 // Don't stop the VM
                 return false;
@@ -1556,7 +1469,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1580,31 +1493,19 @@ pub const VM = struct {
 
         if (self.import_registry.get(fullpath)) |globals| {
             for (globals.items) |global| {
-                self.globals.append(global) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                self.globals.append(global) catch @panic("Out of memory");
             }
         } else {
-            var vm = self.gc.allocator.create(VM) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            var vm = self.gc.allocator.create(VM) catch @panic("Out of memory");
             // FIXME: give reference to JIT?
-            vm.* = VM.init(self.gc, self.import_registry, self.testing) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            vm.* = VM.init(self.gc, self.import_registry, self.testing) catch @panic("Out of memory");
             // TODO: how to free this since we copy things to new vm, also fails anyway
             // {
             //     defer vm.deinit();
             //     defer gn.deinit();
             // }
 
-            vm.interpret(closure.function, null) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            vm.interpret(closure.function, null) catch @panic("Out of memory");
 
             // Top of stack is how many export we got
             var exported_count: u8 = @intCast(vm.peek(0).integer());
@@ -1615,21 +1516,12 @@ pub const VM = struct {
                 var i: u8 = exported_count;
                 while (i > 0) : (i -= 1) {
                     const global = vm.peek(i);
-                    self.globals.append(global) catch |e| {
-                        panic(e);
-                        unreachable;
-                    };
-                    import_cache.append(global) catch |e| {
-                        panic(e);
-                        unreachable;
-                    };
+                    self.globals.append(global) catch @panic("Out of memory");
+                    import_cache.append(global) catch @panic("Out of memory");
                 }
             }
 
-            self.import_registry.put(fullpath, import_cache) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.import_registry.put(fullpath, import_cache) catch @panic("Out of memory");
         }
 
         // Pop path and closure
@@ -1638,7 +1530,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1657,7 +1549,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1675,7 +1567,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1688,14 +1580,11 @@ pub const VM = struct {
     }
 
     fn OP_THROW(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        self.throw(Error.Custom, self.pop()) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        self.throw(Error.Custom, self.pop()) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1711,16 +1600,13 @@ pub const VM = struct {
         var list: *ObjList = self.gc.allocateObject(
             ObjList,
             ObjList.init(self.gc.allocator, self.readConstant(arg).obj().access(ObjTypeDef, .Type, self.gc).?),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         self.push(Value.fromObj(list.toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1746,10 +1632,7 @@ pub const VM = struct {
                     },
                 ) catch @panic("Could not instanciate list"),
             ),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         self.push(Value.fromObj(list.toObj()));
 
@@ -1767,7 +1650,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1783,16 +1666,13 @@ pub const VM = struct {
         var list: *ObjList = self.peek(1).obj().access(ObjList, .List, self.gc).?;
         var list_value: Value = self.peek(0);
 
-        list.rawAppend(self.gc, list_value) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        list.rawAppend(self.gc, list_value) catch @panic("Out of memory");
 
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1808,16 +1688,13 @@ pub const VM = struct {
         var map: *ObjMap = self.gc.allocateObject(ObjMap, ObjMap.init(
             self.gc.allocator,
             self.readConstant(arg).obj().access(ObjTypeDef, .Type, self.gc).?,
-        )) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        )) catch @panic("Out of memory");
 
         self.push(Value.fromObj(map.toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1834,17 +1711,14 @@ pub const VM = struct {
         var key: Value = self.peek(1);
         var value: Value = self.peek(0);
 
-        map.set(self.gc, key, value) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        map.set(self.gc, key, value) catch @panic("Out of memory");
 
         _ = self.pop();
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1861,25 +1735,13 @@ pub const VM = struct {
         const index = self.peek(0).integer();
 
         if (index < 0) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const list_index: usize = @intCast(index);
 
         if (list_index >= list.items.items.len) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
 
             return;
         }
@@ -1895,7 +1757,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1924,7 +1786,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1941,22 +1803,13 @@ pub const VM = struct {
         const index = self.peek(0).integer();
 
         if (index < 0) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound string access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound string access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const str_index: usize = @intCast(index);
 
         if (str_index < str.string.len) {
-            var str_item: Value = (self.gc.copyString(&([_]u8{str.string[str_index]})) catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue();
+            var str_item: Value = (self.gc.copyString(&([_]u8{str.string[str_index]})) catch @panic("Out of memory")).toValue();
 
             // Pop str and index
             _ = self.pop();
@@ -1965,18 +1818,12 @@ pub const VM = struct {
             // Push value
             self.push(str_item);
         } else {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound str access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound str access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -1994,22 +1841,13 @@ pub const VM = struct {
         const value = self.peek(0);
 
         if (index.integer() < 0) {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const list_index: usize = @intCast(index.integer());
 
         if (list_index < list.items.items.len) {
-            list.set(self.gc, list_index, value) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            list.set(self.gc, list_index, value) catch @panic("Out of memory");
 
             // Pop everyting
             _ = self.pop();
@@ -2019,18 +1857,12 @@ pub const VM = struct {
             // Push the value
             self.push(value);
         } else {
-            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2047,10 +1879,7 @@ pub const VM = struct {
         const index = self.peek(1);
         const value = self.peek(0);
 
-        map.set(self.gc, index, value) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        map.set(self.gc, index, value) catch @panic("Out of memory");
 
         // Pop everyting
         _ = self.pop();
@@ -2062,7 +1891,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2078,16 +1907,13 @@ pub const VM = struct {
         var enum_: *ObjEnum = self.gc.allocateObject(
             ObjEnum,
             ObjEnum.init(self.gc.allocator, self.readConstant(arg).obj().access(ObjTypeDef, .Type, self.gc).?),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         self.push(Value.fromObj(enum_.toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2103,20 +1929,14 @@ pub const VM = struct {
         var enum_: *ObjEnum = self.peek(1).obj().access(ObjEnum, .Enum, self.gc).?;
         var enum_value: Value = self.peek(0);
 
-        enum_.cases.append(enum_value) catch |e| {
-            panic(e);
-            unreachable;
-        };
-        self.gc.markObjDirty(&enum_.obj) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        enum_.cases.append(enum_value) catch @panic("Out of memory");
+        self.gc.markObjDirty(&enum_.obj) catch @panic("Out of memory");
 
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2136,16 +1956,13 @@ pub const VM = struct {
         var enum_case: *ObjEnumInstance = self.gc.allocateObject(ObjEnumInstance, ObjEnumInstance{
             .enum_ref = enum_,
             .case = @intCast(arg),
-        }) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        }) catch @panic("Out of memory");
 
         self.push(Value.fromObj(enum_case.toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2165,7 +1982,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2187,10 +2004,7 @@ pub const VM = struct {
                 var enum_case: *ObjEnumInstance = self.gc.allocateObject(ObjEnumInstance, ObjEnumInstance{
                     .enum_ref = enum_,
                     .case = @intCast(index),
-                }) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                }) catch @panic("Out of memory");
 
                 self.push(Value.fromObj(enum_case.toObj()));
                 found = true;
@@ -2205,7 +2019,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2225,16 +2039,13 @@ pub const VM = struct {
                 self.readConstant(arg).obj().access(ObjString, .String, self.gc).?,
                 self.readConstant(@as(u24, @intCast(self.readInstruction()))).obj().access(ObjTypeDef, .Type, self.gc).?,
             ),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         self.push(Value.fromObj(object.toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2255,10 +2066,7 @@ pub const VM = struct {
                 object_or_type.access(ObjObject, .Object, self.gc),
                 object_or_type.access(ObjTypeDef, .Type, self.gc),
             ),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         // If not anonymous, set default fields
         if (object_or_type.access(ObjObject, .Object, self.gc)) |object| {
@@ -2268,14 +2076,8 @@ pub const VM = struct {
                 instance.setField(
                     self.gc,
                     kv.key_ptr.*,
-                    self.cloneValue(kv.value_ptr.*) catch |e| {
-                        panic(e);
-                        unreachable;
-                    },
-                ) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                    self.cloneValue(kv.value_ptr.*) catch @panic("Out of memory"),
+                ) catch @panic("Out of memory");
             }
         }
 
@@ -2283,7 +2085,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2303,16 +2105,13 @@ pub const VM = struct {
         object.methods.put(
             name,
             method.obj().access(ObjClosure, .Closure, self.gc).?,
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2330,23 +2129,17 @@ pub const VM = struct {
         var object: *ObjObject = self.peek(1).obj().access(ObjObject, .Object, self.gc).?;
 
         if (object.type_def.resolved_type.?.Object.fields.contains(name.string)) {
-            object.setField(self.gc, name, property) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            object.setField(self.gc, name, property) catch @panic("Out of memory");
         } else {
             assert(object.type_def.resolved_type.?.Object.static_fields.contains(name.string));
-            object.setStaticField(self.gc, name, property) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            object.setStaticField(self.gc, name, property) catch @panic("Out of memory");
         }
 
         _ = self.pop();
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2367,7 +2160,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2388,10 +2181,7 @@ pub const VM = struct {
             self.push(field);
         } else if (instance.object) |object| {
             if (object.methods.get(name)) |method| {
-                self.bindMethod(method, null) catch |e| {
-                    panic(e);
-                    unreachable;
-                };
+                self.bindMethod(method, null) catch @panic("Out of memory");
             } else {
                 unreachable;
             }
@@ -2399,7 +2189,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2415,21 +2205,15 @@ pub const VM = struct {
         const list = self.peek(0).obj().access(ObjList, .List, self.gc).?;
         const name: *ObjString = self.readString(arg);
 
-        if (list.member(self, name) catch |e| {
-            panic(e);
-            unreachable;
-        }) |member| {
-            self.bindMethod(null, member) catch |e| {
-                panic(e);
-                unreachable;
-            };
+        if (list.member(self, name) catch @panic("Out of memory")) |member| {
+            self.bindMethod(null, member) catch @panic("Out of memory");
         } else {
             unreachable;
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2444,21 +2228,15 @@ pub const VM = struct {
         const map = self.peek(0).obj().access(ObjMap, .Map, self.gc).?;
         const name: *ObjString = self.readString(arg);
 
-        if (map.member(self, name) catch |e| {
-            panic(e);
-            unreachable;
-        }) |member| {
-            self.bindMethod(null, member) catch |e| {
-                panic(e);
-                unreachable;
-            };
+        if (map.member(self, name) catch @panic("Out of memory")) |member| {
+            self.bindMethod(null, member) catch @panic("Out of memory");
         } else {
             unreachable;
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2473,21 +2251,15 @@ pub const VM = struct {
     fn OP_GET_STRING_PROPERTY(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
         const name: *ObjString = self.readString(arg);
 
-        if (ObjString.member(self, name) catch |e| {
-            panic(e);
-            unreachable;
-        }) |member| {
-            self.bindMethod(null, member) catch |e| {
-                panic(e);
-                unreachable;
-            };
+        if (ObjString.member(self, name) catch @panic("Out of memory")) |member| {
+            self.bindMethod(null, member) catch @panic("Out of memory");
         } else {
             unreachable;
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2502,21 +2274,15 @@ pub const VM = struct {
     fn OP_GET_PATTERN_PROPERTY(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
         const name: *ObjString = self.readString(arg);
 
-        if (ObjPattern.member(self, name) catch |e| {
-            panic(e);
-            unreachable;
-        }) |member| {
-            self.bindMethod(null, member) catch |e| {
-                panic(e);
-                unreachable;
-            };
+        if (ObjPattern.member(self, name) catch @panic("Out of memory")) |member| {
+            self.bindMethod(null, member) catch @panic("Out of memory");
         } else {
             unreachable;
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2531,19 +2297,13 @@ pub const VM = struct {
     fn OP_GET_FIBER_PROPERTY(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
         const name: *ObjString = self.readString(arg);
 
-        if (ObjFiber.member(self, name) catch |e| {
-            panic(e);
-            unreachable;
-        }) |member| {
-            self.bindMethod(null, member) catch |e| {
-                panic(e);
-                unreachable;
-            };
+        if (ObjFiber.member(self, name) catch @panic("Out of memory")) |member| {
+            self.bindMethod(null, member) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2560,10 +2320,7 @@ pub const VM = struct {
         const name: *ObjString = self.readString(arg);
 
         // Set new value
-        object.setStaticField(self.gc, name, self.peek(0)) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        object.setStaticField(self.gc, name, self.peek(0)) catch @panic("Out of memory");
 
         // Get the new value from stack, pop the object and push value again
         const value: Value = self.pop();
@@ -2572,7 +2329,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2589,10 +2346,7 @@ pub const VM = struct {
         const name: *ObjString = self.readString(arg);
 
         // Set new value
-        instance.setField(self.gc, name, self.peek(0)) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        instance.setField(self.gc, name, self.peek(0)) catch @panic("Out of memory");
 
         // Get the new value from stack, pop the instance and push value again
         const value: Value = self.pop();
@@ -2601,7 +2355,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2618,7 +2372,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2637,7 +2391,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2674,7 +2428,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2711,7 +2465,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2727,14 +2481,11 @@ pub const VM = struct {
         const right: *ObjString = self.pop().obj().access(ObjString, .String, self.gc).?;
         const left: *ObjString = self.pop().obj().access(ObjString, .String, self.gc).?;
 
-        self.push(Value.fromObj((left.concat(self, right) catch |e| {
-            panic(e);
-            unreachable;
-        }).toObj()));
+        self.push(Value.fromObj((left.concat(self, right) catch @panic("Out of memory")).toObj()));
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2751,29 +2502,20 @@ pub const VM = struct {
         const left: *ObjList = self.pop().obj().access(ObjList, .List, self.gc).?;
 
         var new_list = std.ArrayList(Value).init(self.gc.allocator);
-        new_list.appendSlice(left.items.items) catch |e| {
-            panic(e);
-            unreachable;
-        };
-        new_list.appendSlice(right.items.items) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        new_list.appendSlice(left.items.items) catch @panic("Out of memory");
+        new_list.appendSlice(right.items.items) catch @panic("Out of memory");
 
         self.push(
             (self.gc.allocateObject(ObjList, ObjList{
                 .type_def = left.type_def,
                 .methods = left.methods,
                 .items = new_list,
-            }) catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue(),
+            }) catch @panic("Out of memory")).toValue(),
         );
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2789,16 +2531,10 @@ pub const VM = struct {
         const right: *ObjMap = self.pop().obj().access(ObjMap, .Map, self.gc).?;
         const left: *ObjMap = self.pop().obj().access(ObjMap, .Map, self.gc).?;
 
-        var new_map = left.map.clone() catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var new_map = left.map.clone() catch @panic("Out of memory");
         var it = right.map.iterator();
         while (it.next()) |entry| {
-            new_map.put(entry.key_ptr.*, entry.value_ptr.*) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            new_map.put(entry.key_ptr.*, entry.value_ptr.*) catch @panic("Out of memory");
         }
 
         self.push(
@@ -2806,15 +2542,12 @@ pub const VM = struct {
                 .type_def = left.type_def,
                 .methods = left.methods,
                 .map = new_map,
-            }) catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue(),
+            }) catch @panic("Out of memory")).toValue(),
         );
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2844,7 +2577,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2873,7 +2606,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2902,7 +2635,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2929,7 +2662,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2958,7 +2691,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -2983,7 +2716,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3008,7 +2741,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3032,7 +2765,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3070,7 +2803,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3108,7 +2841,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3125,7 +2858,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3142,7 +2875,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3159,7 +2892,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3178,7 +2911,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3197,7 +2930,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3214,7 +2947,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3231,25 +2964,19 @@ pub const VM = struct {
         const value_slot: *Value = @ptrCast(self.current_fiber.stack_top - 2);
         const str: *ObjString = self.peek(0).obj().access(ObjString, .String, self.gc).?;
 
-        key_slot.* = if (str.next(self, if (key_slot.*.isNull()) null else key_slot.integer()) catch |e| {
-            panic(e);
-            unreachable;
-        }) |new_index|
+        key_slot.* = if (str.next(self, if (key_slot.*.isNull()) null else key_slot.integer()) catch @panic("Out of memory")) |new_index|
             Value.fromInteger(new_index)
         else
             Value.Null;
 
         // Set new value
         if (key_slot.*.isInteger()) {
-            value_slot.* = (self.gc.copyString(&([_]u8{str.string[@as(usize, @intCast(key_slot.integer()))]})) catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue();
+            value_slot.* = (self.gc.copyString(&([_]u8{str.string[@as(usize, @intCast(key_slot.integer()))]})) catch @panic("Out of memory")).toValue();
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3270,10 +2997,7 @@ pub const VM = struct {
         key_slot.* = if (list.rawNext(
             self,
             if (key_slot.*.isNull()) null else key_slot.integer(),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        }) |new_index|
+        ) catch @panic("Out of memory")) |new_index|
             Value.fromInteger(new_index)
         else
             Value.Null;
@@ -3285,7 +3009,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3306,15 +3030,12 @@ pub const VM = struct {
         var enum_: *ObjEnum = self.peek(0).obj().access(ObjEnum, .Enum, self.gc).?;
 
         // Get next enum case
-        var next_case: ?*ObjEnumInstance = enum_.rawNext(self, enum_case) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        var next_case: ?*ObjEnumInstance = enum_.rawNext(self, enum_case) catch @panic("Out of memory");
         value_slot.* = (if (next_case) |new_case| Value.fromObj(new_case.toObj()) else Value.Null);
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3341,7 +3062,7 @@ pub const VM = struct {
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3360,15 +3081,12 @@ pub const VM = struct {
         if (fiber.fiber.status == .Over) {
             value_slot.* = Value.Null;
         } else {
-            fiber.fiber.resume_(self) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            fiber.fiber.resume_(self) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3383,18 +3101,12 @@ pub const VM = struct {
     fn OP_UNWRAP(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         if (self.peek(0).isNull()) {
             // TODO: Should we throw or @panic?
-            self.throw(Error.UnwrappedNull, (self.gc.copyString("Force unwrapped optional is null") catch |e| {
-                panic(e);
-                unreachable;
-            }).toValue()) catch |e| {
-                panic(e);
-                unreachable;
-            };
+            self.throw(Error.UnwrappedNull, (self.gc.copyString("Force unwrapped optional is null") catch @panic("Out of memory")).toValue()) catch @panic("Out of memory");
         }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
-            .always_tail,
+            dispatch_call_modifier,
             dispatch,
             .{
                 self,
@@ -3438,7 +3150,7 @@ pub const VM = struct {
         );
     }
 
-    pub fn throw(self: *Self, code: Error, payload: Value) MIRJIT.Error!void {
+    pub fn throw(self: *Self, code: Error, payload: Value) VM.Error!void {
         var stack = std.ArrayList(CallFrame).init(self.gc.allocator);
         defer stack.deinit();
 
@@ -3540,58 +3252,60 @@ pub const VM = struct {
     }
 
     // FIXME: catch_values should be on the stack like arguments
-    fn call(self: *Self, closure: *ObjClosure, arg_count: u8, catch_value: ?Value, in_fiber: bool) MIRJIT.Error!void {
+    fn call(self: *Self, closure: *ObjClosure, arg_count: u8, catch_value: ?Value, in_fiber: bool) VM.Error!void {
         closure.function.call_count += 1;
 
         var native = closure.function.native;
-        if (self.mir_jit) |*mir_jit| {
-            mir_jit.call_count += 1;
-            // Do we need to jit the function?
-            // TODO: figure out threshold strategy
-            if (!in_fiber and self.shouldCompileFunction(closure)) {
-                var timer = std.time.Timer.start() catch unreachable;
+        if (BuildOptions.jit) {
+            if (self.mir_jit) |*mir_jit| {
+                mir_jit.call_count += 1;
+                // Do we need to jit the function?
+                // TODO: figure out threshold strategy
+                if (!in_fiber and self.shouldCompileFunction(closure)) {
+                    var timer = std.time.Timer.start() catch unreachable;
 
-                var success = true;
-                mir_jit.compileFunction(closure) catch |err| {
-                    if (err == MIRJIT.Error.CantCompile) {
-                        success = false;
-                    } else {
-                        return err;
+                    var success = true;
+                    mir_jit.compileFunction(closure) catch |err| {
+                        if (err == VM.Error.CantCompile) {
+                            success = false;
+                        } else {
+                            return err;
+                        }
+                    };
+
+                    if (BuildOptions.debug_jit and success) {
+                        std.debug.print(
+                            "Compiled function `{s}` in {d} ms\n",
+                            .{
+                                closure.function.type_def.resolved_type.?.Function.name.string,
+                                @as(f64, @floatFromInt(timer.read())) / 1000000,
+                            },
+                        );
                     }
-                };
 
-                if (BuildOptions.debug_jit and success) {
-                    std.debug.print(
-                        "Compiled function `{s}` in {d} ms\n",
-                        .{
-                            closure.function.type_def.resolved_type.?.Function.name.string,
-                            @as(f64, @floatFromInt(timer.read())) / 1000000,
-                        },
-                    );
-                }
+                    mir_jit.jit_time += timer.read();
 
-                mir_jit.jit_time += timer.read();
-
-                if (success) {
-                    native = closure.function.native;
+                    if (success) {
+                        native = closure.function.native;
+                    }
                 }
             }
-        }
 
-        // Is there a compiled version of it?
-        if (!in_fiber and native != null) {
-            if (BuildOptions.debug_jit) {
-                std.debug.print("Calling compiled version of function `{s}`\n", .{closure.function.name.string});
+            // Is there a compiled version of it?
+            if (!in_fiber and native != null) {
+                if (BuildOptions.debug_jit) {
+                    std.debug.print("Calling compiled version of function `{s}`\n", .{closure.function.name.string});
+                }
+
+                try self.callCompiled(
+                    closure,
+                    @ptrCast(@alignCast(native.?)),
+                    arg_count,
+                    catch_value,
+                );
+
+                return;
             }
-
-            try self.callCompiled(
-                closure,
-                @ptrCast(@alignCast(native.?)),
-                arg_count,
-                catch_value,
-            );
-
-            return;
         }
 
         // TODO: check for stack overflow
@@ -3721,7 +3435,7 @@ pub const VM = struct {
         self.push(Value.fromObj(bound.toObj()));
     }
 
-    pub fn callValue(self: *Self, callee: Value, arg_count: u8, catch_value: ?Value, in_fiber: bool) MIRJIT.Error!void {
+    pub fn callValue(self: *Self, callee: Value, arg_count: u8, catch_value: ?Value, in_fiber: bool) VM.Error!void {
         var obj: *Obj = callee.obj();
         switch (obj.obj_type) {
             .Bound => {

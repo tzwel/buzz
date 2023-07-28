@@ -1,6 +1,47 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const is_wasm = builtin.cpu.arch.isWasm();
 const Allocator = std.mem.Allocator;
+
+// When targetting 'wasm32-freestanding', OS-specific functionality like reading files or writing
+// to the terminal is normally unavailable. However, Zig supports the concept of BYOOS ("bring your
+// own operating system") by giving you the option of overriding OS-specific functionality with your
+// own implementations. This is done by declaring an 'os.system' struct in the root source file.
+//
+// The chunk of code below implements the minimal set of functionality needed for things like
+// 'std.log' and 'std.debug.print()' to work.
+// zig side: https://github.com/castholm/wasm-sliding-puzzle/blob/0ef992a5b5d7b9eeadd3d525d2e78eb83f955a6c/src/main.zig#L64-L99
+// js size: https://github.com/castholm/wasm-sliding-puzzle/blob/0ef992a5b5d7b9eeadd3d525d2e78eb83f955a6c/src/Stderr.ts
+pub const os = if (is_wasm) struct {
+    pub const system = struct {
+        var errno: E = undefined;
+
+        pub const E = std.os.wasi.E;
+
+        pub fn getErrno(rc: anytype) E {
+            return if (rc == -1) errno else .SUCCESS;
+        }
+
+        pub const fd_t = std.os.wasi.fd_t;
+
+        pub const STDERR_FILENO = std.os.wasi.STDERR_FILENO;
+
+        pub fn write(fd: i32, buf: [*]const u8, count: usize) isize {
+            // We only support writing to stderr.
+            if (fd != std.os.STDERR_FILENO) {
+                errno = .PERM;
+                return -1;
+            }
+
+            const clamped_count = @min(count, std.math.maxInt(isize));
+            writeToStderr(buf, clamped_count);
+            return @intCast(clamped_count);
+        }
+
+        extern "stderr" fn writeToStderr(string_ptr: [*]const u8, string_length: usize) void;
+    };
+} else std.os;
+
 const _vm = @import("./vm.zig");
 const VM = _vm.VM;
 const ImportRegistry = _vm.ImportRegistry;
