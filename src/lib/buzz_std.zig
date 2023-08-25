@@ -39,30 +39,48 @@ export fn print(ctx: *api.NativeCtx) c_int {
     return 0;
 }
 
-export fn toInt(ctx: *api.NativeCtx) c_int {
+export fn floatToInt(ctx: *api.NativeCtx) c_int {
     const value = ctx.vm.bz_peek(0);
 
     ctx.vm.bz_push(
         api.Value.fromInteger(
-            if (value.isFloat())
-                @as(i32, @intFromFloat(value.float()))
-            else
-                value.integer(),
+            @as(i32, @intFromFloat(value.float())),
         ),
     );
 
     return 1;
 }
 
-export fn toFloat(ctx: *api.NativeCtx) c_int {
+export fn floatToUint(ctx: *api.NativeCtx) c_int {
+    const value = ctx.vm.bz_peek(0);
+
+    ctx.vm.bz_push(
+        api.Value.fromUnsigned(
+            @as(u32, @intFromFloat(value.float())),
+        ),
+    );
+
+    return 1;
+}
+
+export fn intToFloat(ctx: *api.NativeCtx) c_int {
     const value = ctx.vm.bz_peek(0);
 
     ctx.vm.bz_push(
         api.Value.fromFloat(
-            if (value.isInteger())
-                @as(f64, @floatFromInt(value.integer()))
-            else
-                value.float(),
+            @as(f64, @floatFromInt(value.integer())),
+        ),
+    );
+
+    return 1;
+}
+
+export fn uintToFloat(ctx: *api.NativeCtx) c_int {
+    const value = ctx.vm.bz_peek(0);
+
+    ctx.vm.bz_push(
+        api.Value.fromFloat(
+            @as(f64, @floatFromInt(value.unsigned())),
         ),
     );
 
@@ -83,13 +101,38 @@ export fn parseInt(ctx: *api.NativeCtx) c_int {
 
     const string_slice = string.?[0..len];
 
-    const number: i32 = std.fmt.parseInt(i32, string_slice, 10) catch {
+    const number = std.fmt.parseInt(i32, string_slice, 10) catch {
         ctx.vm.bz_push(api.Value.Null);
 
         return 1;
     };
 
     ctx.vm.bz_push(api.Value.fromInteger(number));
+
+    return 1;
+}
+
+export fn parseUint(ctx: *api.NativeCtx) c_int {
+    const string_value = ctx.vm.bz_peek(0);
+
+    var len: usize = 0;
+    const string = string_value.bz_valueToString(&len);
+
+    if (len == 0) {
+        ctx.vm.bz_push(api.Value.Null);
+
+        return 1;
+    }
+
+    const string_slice = string.?[0..len];
+
+    const number = std.fmt.parseInt(u32, string_slice, 10) catch {
+        ctx.vm.bz_push(api.Value.Null);
+
+        return 1;
+    };
+
+    ctx.vm.bz_push(api.Value.fromUnsigned(number));
 
     return 1;
 }

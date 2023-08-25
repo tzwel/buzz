@@ -301,8 +301,8 @@ pub fn main() !void {
         res.positionals[0],
         positionals.items[1..],
         flavor,
-    ) catch {
-        // TODO: should probably choses appropriate error code
+    ) catch |e| {
+        std.debug.print("Something went wrong: {}\n", .{e});
         std.os.exit(1);
     };
 

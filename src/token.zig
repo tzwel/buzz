@@ -10,9 +10,10 @@ pub const Token = struct {
     token_type: TokenType,
     lexeme: []const u8,
     // Literal is either a string or a number
-    literal_string: ?[]const u8 = null,
-    literal_float: ?f64 = null,
-    literal_integer: ?i32 = null,
+    str: ?[]const u8 = null,
+    float: ?f64 = null,
+    int: ?i32 = null,
+    uint: ?u32 = null,
     line: usize,
     column: usize,
     offset: usize = 0,
@@ -36,7 +37,7 @@ pub const Token = struct {
             .column = 0,
             .source = "",
             .script_name = "",
-            .literal_string = name,
+            .str = name,
         };
     }
 
@@ -46,9 +47,10 @@ pub const Token = struct {
             .lexeme = self.lexeme,
             .source = self.source,
             .script_name = self.script_name,
-            .literal_string = self.literal_string,
-            .literal_float = self.literal_float,
-            .literal_integer = self.literal_integer,
+            .str = self.str,
+            .float = self.float,
+            .int = self.int,
+            .uint = self.uint,
             .line = self.line,
             .column = self.column,
         };
@@ -118,6 +120,7 @@ pub const TokenType = enum {
     Str, // str
     Ud, // ud
     Int, // int
+    UInt, // uint
     Float, // float
     Type, // type
     Bool, // bool
@@ -146,6 +149,7 @@ pub const TokenType = enum {
     In, // in
     Is, // is
     IntegerValue, // 123
+    UnsignedValue, // 0u123
     FloatValue, // 123.2
     String, // "hello"
     Identifier, // anIdentifier
@@ -209,6 +213,7 @@ pub const keywords = std.ComptimeStringMap(
         .{ "in", .In },
         .{ "str", .Str },
         .{ "int", .Int },
+        .{ "uint", .UInt },
         .{ "float", .Float },
         .{ "bool", .Bool },
         .{ "pat", .Pat },

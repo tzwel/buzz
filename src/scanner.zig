@@ -50,7 +50,13 @@ pub const Scanner = struct {
         self.current.start_column = self.current.column;
 
         if (self.isEOF()) {
-            return self.makeToken(.Eof, null, null, null);
+            return self.makeToken(
+                .Eof,
+                null,
+                null,
+                null,
+                null,
+            );
         }
 
         var char: u8 = self.advance();
@@ -61,71 +67,73 @@ pub const Scanner = struct {
                 try self.hexa()
             else if (self.match('b'))
                 try self.binary()
+            else if (self.match('u'))
+                try self.unsigned()
             else
                 try self.number(),
             '1'...'9' => try self.number(),
 
-            '[' => self.makeToken(.LeftBracket, null, null, null),
-            ']' => self.makeToken(.RightBracket, null, null, null),
-            '(' => self.makeToken(.LeftParen, null, null, null),
-            ')' => self.makeToken(.RightParen, null, null, null),
-            '{' => self.makeToken(.LeftBrace, null, null, null),
-            '}' => self.makeToken(.RightBrace, null, null, null),
-            ',' => self.makeToken(.Comma, null, null, null),
-            ';' => self.makeToken(.Semicolon, null, null, null),
+            '[' => self.makeToken(.LeftBracket, null, null, null, null),
+            ']' => self.makeToken(.RightBracket, null, null, null, null),
+            '(' => self.makeToken(.LeftParen, null, null, null, null),
+            ')' => self.makeToken(.RightParen, null, null, null, null),
+            '{' => self.makeToken(.LeftBrace, null, null, null, null),
+            '}' => self.makeToken(.RightBrace, null, null, null, null),
+            ',' => self.makeToken(.Comma, null, null, null, null),
+            ';' => self.makeToken(.Semicolon, null, null, null, null),
             '.' => if (self.match('.'))
-                self.makeToken(.Spread, null, null, null)
+                self.makeToken(.Spread, null, null, null, null)
             else
-                self.makeToken(.Dot, null, null, null),
+                self.makeToken(.Dot, null, null, null, null),
             '>' => if (self.match('>'))
-                self.makeToken(.ShiftRight, null, null, null)
+                self.makeToken(.ShiftRight, null, null, null, null)
             else if (self.match('='))
-                self.makeToken(.GreaterEqual, null, null, null)
+                self.makeToken(.GreaterEqual, null, null, null, null)
             else
-                self.makeToken(.Greater, null, null, null),
+                self.makeToken(.Greater, null, null, null, null),
             '<' => if (self.match('<'))
-                self.makeToken(.ShiftLeft, null, null, null)
+                self.makeToken(.ShiftLeft, null, null, null, null)
             else if (self.match('='))
-                self.makeToken(.LessEqual, null, null, null)
+                self.makeToken(.LessEqual, null, null, null, null)
             else
-                self.makeToken(.Less, null, null, null),
-            '~' => self.makeToken(.Bnot, null, null, null),
-            '^' => self.makeToken(.Xor, null, null, null),
-            '\\' => self.makeToken(.Bor, null, null, null),
+                self.makeToken(.Less, null, null, null, null),
+            '~' => self.makeToken(.Bnot, null, null, null, null),
+            '^' => self.makeToken(.Xor, null, null, null, null),
+            '\\' => self.makeToken(.Bor, null, null, null, null),
             '+' => if (self.match('+'))
-                self.makeToken(.Increment, null, null, null)
+                self.makeToken(.Increment, null, null, null, null)
             else if (self.match('='))
-                self.makeToken(.PlusEqual, null, null, null)
+                self.makeToken(.PlusEqual, null, null, null, null)
             else
-                self.makeToken(.Plus, null, null, null),
+                self.makeToken(.Plus, null, null, null, null),
             '-' => if (self.match('-'))
-                self.makeToken(.Decrement, null, null, null)
+                self.makeToken(.Decrement, null, null, null, null)
             else if (self.match('='))
-                self.makeToken(.MinusEqual, null, null, null)
+                self.makeToken(.MinusEqual, null, null, null, null)
             else if (self.match('>'))
-                self.makeToken(.Arrow, null, null, null)
+                self.makeToken(.Arrow, null, null, null, null)
             else
-                self.makeToken(.Minus, null, null, null),
-            '&' => self.makeToken(.Ampersand, null, null, null),
-            '*' => self.makeToken(if (self.match('=')) .StarEqual else .Star, null, null, null),
-            '/' => self.makeToken(if (self.match('=')) .SlashEqual else .Slash, null, null, null),
-            '%' => self.makeToken(.Percent, null, null, null),
-            '?' => self.makeToken(if (self.match('?')) .QuestionQuestion else .Question, null, null, null),
+                self.makeToken(.Minus, null, null, null, null),
+            '&' => self.makeToken(.Ampersand, null, null, null, null),
+            '*' => self.makeToken(if (self.match('=')) .StarEqual else .Star, null, null, null, null),
+            '/' => self.makeToken(if (self.match('=')) .SlashEqual else .Slash, null, null, null, null),
+            '%' => self.makeToken(.Percent, null, null, null, null),
+            '?' => self.makeToken(if (self.match('?')) .QuestionQuestion else .Question, null, null, null, null),
             '!' => if (self.match('='))
-                self.makeToken(.BangEqual, null, null, null)
+                self.makeToken(.BangEqual, null, null, null, null)
             else if (self.match('>'))
-                self.makeToken(.BangGreater, null, null, null)
+                self.makeToken(.BangGreater, null, null, null, null)
             else
-                self.makeToken(.Bang, null, null, null),
-            ':' => self.makeToken(.Colon, null, null, null),
-            '=' => self.makeToken(if (self.match('=')) .EqualEqual else .Equal, null, null, null),
+                self.makeToken(.Bang, null, null, null, null),
+            ':' => self.makeToken(.Colon, null, null, null, null),
+            '=' => self.makeToken(if (self.match('=')) .EqualEqual else .Equal, null, null, null, null),
             '"' => self.string(false),
             '`' => self.string(true),
             '@' => self.atIdentifier(),
             '|' => self.docblock(),
             '$' => self.pattern(),
 
-            else => self.makeToken(.Error, "Unexpected character.", null, null),
+            else => self.makeToken(.Error, "Unexpected character.", null, null, null),
         };
     }
 
@@ -205,12 +213,24 @@ pub const Scanner = struct {
             }
         }
 
-        return self.makeToken(.Docblock, std.mem.trim(u8, block.items, " "), null, null);
+        return self.makeToken(
+            .Docblock,
+            std.mem.trim(u8, block.items, " "),
+            null,
+            null,
+            null,
+        );
     }
 
     fn atIdentifier(self: *Self) !Token {
         if (self.advance() != '"') {
-            return self.makeToken(.Error, "Unterminated identifier.", null, null);
+            return self.makeToken(
+                .Error,
+                "Unterminated identifier.",
+                null,
+                null,
+                null,
+            );
         }
 
         const string_token = try self.string(false);
@@ -218,10 +238,10 @@ pub const Scanner = struct {
         self.token_index += 1;
         return .{
             .token_type = .Identifier,
-            .lexeme = string_token.literal_string.?,
-            .literal_string = string_token.literal_string.?,
-            .literal_float = null,
-            .literal_integer = null,
+            .lexeme = string_token.str.?,
+            .str = string_token.str.?,
+            .float = null,
+            .int = null,
             .offset = self.current.start - 1,
             .line = self.line_offset + self.current.start_line,
             .column = self.column_offset + self.current.start_column,
@@ -240,12 +260,30 @@ pub const Scanner = struct {
 
         if (keywordOpt) |keyword| {
             if (keyword == .As and self.match('?')) {
-                return self.makeToken(.AsBang, null, null, null);
+                return self.makeToken(
+                    .AsBang,
+                    null,
+                    null,
+                    null,
+                    null,
+                );
             }
 
-            return self.makeToken(keyword, literal, null, null);
+            return self.makeToken(
+                keyword,
+                literal,
+                null,
+                null,
+                null,
+            );
         } else {
-            return self.makeToken(.Identifier, literal, null, null);
+            return self.makeToken(
+                .Identifier,
+                literal,
+                null,
+                null,
+                null,
+            );
         }
     }
 
@@ -269,6 +307,21 @@ pub const Scanner = struct {
             null,
             if (is_float) try std.fmt.parseFloat(f64, self.source[self.current.start..self.current.offset]) else null,
             if (!is_float) try std.fmt.parseInt(i32, self.source[self.current.start..self.current.offset], 10) else null,
+            null,
+        );
+    }
+
+    fn unsigned(self: *Self) !Token {
+        while (isNumber(self.peek())) {
+            _ = self.advance();
+        }
+
+        return self.makeToken(
+            .UnsignedValue,
+            null,
+            null,
+            null,
+            try std.fmt.parseInt(u32, self.source[self.current.start + 2 .. self.current.offset], 10),
         );
     }
 
@@ -280,11 +333,20 @@ pub const Scanner = struct {
             peeked = self.peek();
         }
 
+        const uint = try std.fmt.parseInt(u32, self.source[self.current.start + 2 .. self.current.offset], 2);
+
         return self.makeToken(
             .IntegerValue,
             null,
             null,
-            try std.fmt.parseInt(i32, self.source[self.current.start + 2 .. self.current.offset], 2),
+            if (uint <= std.math.maxInt(i32))
+                @intCast(uint)
+            else
+                null,
+            if (uint > std.math.maxInt(i32))
+                uint
+            else
+                null,
         );
     }
 
@@ -298,22 +360,43 @@ pub const Scanner = struct {
             peeked = self.peek();
         }
 
+        const uint = try std.fmt.parseInt(u32, self.source[self.current.start + 2 .. self.current.offset], 16);
+
         return self.makeToken(
             .IntegerValue,
             null,
             null,
-            try std.fmt.parseInt(i32, self.source[self.current.start + 2 .. self.current.offset], 16),
+            if (uint <= std.math.maxInt(i32))
+                @intCast(uint)
+            else
+                null,
+            if (uint > std.math.maxInt(i32))
+                uint
+            else
+                null,
         );
     }
 
     fn pattern(self: *Self) !Token {
         if (self.advance() != '"') {
-            return self.makeToken(.Error, "Unterminated pattern.", null, null);
+            return self.makeToken(
+                .Error,
+                "Unterminated pattern.",
+                null,
+                null,
+                null,
+            );
         }
 
         while ((self.peek() != '"' or self.peekNext() == '"') and !self.isEOF()) {
             if (self.peek() == '\n') {
-                return self.makeToken(.Error, "Unterminated pattern.", null, null);
+                return self.makeToken(
+                    .Error,
+                    "Unterminated pattern.",
+                    null,
+                    null,
+                    null,
+                );
             } else if (self.peek() == '\\' and self.peekNext() == '"') {
                 // Escaped pattern delimiter, go past it
                 _ = self.advance();
@@ -323,7 +406,13 @@ pub const Scanner = struct {
         }
 
         if (self.isEOF()) {
-            return self.makeToken(.Error, "Unterminated pattern.", null, null);
+            return self.makeToken(
+                .Error,
+                "Unterminated pattern.",
+                null,
+                null,
+                null,
+            );
         } else {
             _ = self.advance();
         }
@@ -336,6 +425,7 @@ pub const Scanner = struct {
                 null,
             null,
             null,
+            null,
         );
     }
 
@@ -345,7 +435,13 @@ pub const Scanner = struct {
         var interp_depth: usize = 0;
         while ((self.peek() != delimiter or in_interp) and !self.isEOF()) {
             if (self.peek() == '\n' and !multiline) {
-                return self.makeToken(.Error, "Unterminated string.", null, null);
+                return self.makeToken(
+                    .Error,
+                    "Unterminated string.",
+                    null,
+                    null,
+                    null,
+                );
             } else if (self.peek() == '{') {
                 if (!in_interp) {
                     in_interp = true;
@@ -379,7 +475,13 @@ pub const Scanner = struct {
         }
 
         if (self.isEOF()) {
-            return self.makeToken(.Error, "Unterminated string.", null, null);
+            return self.makeToken(
+                .Error,
+                "Unterminated string.",
+                null,
+                null,
+                null,
+            );
         } else {
             _ = self.advance();
         }
@@ -390,6 +492,7 @@ pub const Scanner = struct {
                 self.source[(self.current.start + 1)..(self.current.offset - 1)]
             else
                 null,
+            null,
             null,
             null,
         );
@@ -437,14 +540,22 @@ pub const Scanner = struct {
         return true;
     }
 
-    fn makeToken(self: *Self, token_type: TokenType, literal_string: ?[]const u8, literal_float: ?f64, literal_integer: ?i32) Token {
+    fn makeToken(
+        self: *Self,
+        token_type: TokenType,
+        str: ?[]const u8,
+        float: ?f64,
+        int: ?i32,
+        uint: ?u32,
+    ) Token {
         self.token_index += 1;
         return Token{
             .token_type = token_type,
             .lexeme = self.source[self.current.start..self.current.offset],
-            .literal_string = literal_string,
-            .literal_float = literal_float,
-            .literal_integer = literal_integer,
+            .str = str,
+            .float = float,
+            .int = int,
+            .uint = uint,
             .offset = self.current.start,
             .line = self.line_offset + self.current.start_line,
             .column = self.column_offset + self.current.start_column,

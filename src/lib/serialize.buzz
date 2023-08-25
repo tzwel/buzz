@@ -34,7 +34,7 @@ export object Boxed {
     fun q([str] path) > Boxed {
         if (this.map != null) {
             if (path.len() > 1) {
-                return (this.map![path[0]] ?? Boxed{}).q(path.sub(1));
+                return (this.map![path[0]] ?? Boxed{}).q(path.sub(0u1));
             } else if (path.len() > 0) {
                 return this.map![path[0]] ?? Boxed{};
             } else {

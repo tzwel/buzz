@@ -1478,10 +1478,26 @@ fn buildValueToInteger(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     );
 }
 
+fn buildValueToUnsignedInteger(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
+    self.ANDS(
+        dest,
+        value,
+        m.MIR_new_uint_op(self.ctx, 0xffffffff),
+    );
+}
+
 fn buildValueFromInteger(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     self.OR(
         dest,
         m.MIR_new_uint_op(self.ctx, v.IntegerMask),
+        value,
+    );
+}
+
+fn buildValueFromUnsignedInteger(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
+    self.OR(
+        dest,
+        m.MIR_new_uint_op(self.ctx, v.UnsignedIntegerMask),
         value,
     );
 }
@@ -1756,6 +1772,7 @@ fn unwrap(self: *Self, def_type: o.ObjTypeDef.Type, value: m.MIR_op_t, dest: m.M
     return switch (def_type) {
         .Bool => self.buildValueToBoolean(value, dest),
         .Integer => self.buildValueToInteger(value, dest),
+        .UnsignedInteger => self.buildValueToUnsignedInteger(value, dest),
         .Float => self.buildValueToFloat(value, dest),
         .Void => self.MOV(dest, value),
         .String,
@@ -1786,6 +1803,7 @@ fn wrap(self: *Self, def_type: o.ObjTypeDef.Type, value: m.MIR_op_t, dest: m.MIR
     return switch (def_type) {
         .Bool => self.buildValueFromBoolean(value, dest),
         .Integer => self.buildValueFromInteger(value, dest),
+        .UnsignedInteger => self.buildValueFromUnsignedInteger(value, dest),
         .Float => self.buildValueFromFloat(value, dest),
         .Void => self.MOV(dest, m.MIR_new_uint_op(self.ctx, v.Value.Void.val)),
         .String,
@@ -1852,6 +1870,10 @@ fn generateNode(self: *Self, node: *n.ParseNode) Error!?m.MIR_op_t {
         .Integer => m.MIR_new_uint_op(
             self.ctx,
             v.Value.fromInteger(n.IntegerNode.cast(node).?.integer_constant).val,
+        ),
+        .UnsignedInteger => m.MIR_new_uint_op(
+            self.ctx,
+            v.Value.fromUnsigned(n.UnsignedIntegerNode.cast(node).?.integer_constant).val,
         ),
         .StringLiteral => m.MIR_new_uint_op(
             self.ctx,
@@ -2811,7 +2833,7 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
             const left_value = (try self.generateNode(binary_node.left)).?;
             const right_value = (try self.generateNode(binary_node.right)).?;
 
-            const res = m.MIR_new_reg_op(
+            var res = m.MIR_new_reg_op(
                 self.ctx,
                 try self.REG("res", m.MIR_T_I64),
             );
@@ -2824,28 +2846,24 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                 try self.REG("right", if (right_type_def == .Float) m.MIR_T_D else m.MIR_T_I64),
             );
 
-            if (left_type_def == .Integer) {
-                try self.unwrap(.Integer, left_value, left);
-            } else if (left_type_def == .Float) {
-                try self.unwrap(.Float, left_value, left);
+            if (left_type_def == .Integer or left_type_def == .Float or left_type_def == .UnsignedInteger) {
+                try self.unwrap(left_type_def, left_value, left);
             } else {
                 self.MOV(left, left_value);
             }
 
-            if (right_type_def == .Integer) {
-                try self.unwrap(.Integer, right_value, right);
-            } else if (right_type_def == .Float) {
-                try self.unwrap(.Float, right_value, right);
+            if (right_type_def == .Integer or right_type_def == .Float or right_type_def == .UnsignedInteger) {
+                try self.unwrap(right_type_def, right_value, right);
             } else {
                 self.MOV(right, right_value);
             }
 
             // Avoid collection
-            if (left_type_def != .Integer and left_type_def != .Float) {
+            if (left_type_def != .Integer and left_type_def != .Float and left_type_def != .UnsignedInteger) {
                 try self.buildPush(left_value);
             }
 
-            if (right_type_def != .Integer and right_type_def != .Float) {
+            if (right_type_def != .Integer and right_type_def != .Float and right_type_def != .UnsignedInteger) {
                 try self.buildPush(right_value);
             }
 
@@ -2897,21 +2915,29 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                 },
                 .Greater, .Less, .GreaterEqual, .LessEqual => {
                     if (left_type_def == .Float or right_type_def == .Float) {
-                        if (left_type_def == .Integer) {
+                        if (left_type_def == .Integer or left_type_def == .UnsignedInteger) {
                             const left_f = m.MIR_new_reg_op(
                                 self.ctx,
                                 try self.REG("left_float", m.MIR_T_D),
                             );
-                            self.I2D(left_f, left);
+                            if (left_type_def == .Integer) {
+                                self.I2D(left_f, left);
+                            } else {
+                                self.UI2D(left_f, left);
+                            }
                             left = left_f;
                         }
 
-                        if (right_type_def == .Integer) {
+                        if (right_type_def == .Integer or right_type_def == .UnsignedInteger) {
                             const right_f = m.MIR_new_reg_op(
                                 self.ctx,
                                 try self.REG("right_float", m.MIR_T_D),
                             );
-                            self.I2D(right_f, right);
+                            if (right_type_def == .Integer) {
+                                self.I2D(right_f, right);
+                            } else {
+                                self.UI2D(right_f, right);
+                            }
                             right = right_f;
                         }
 
@@ -2922,8 +2948,14 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                             .LessEqual => self.DLE(res, left, right),
                             else => unreachable,
                         }
-
-                        self.wrap(.Bool, res, res);
+                    } else if (left_type_def == .UnsignedInteger or right_type_def == .UnsignedInteger) {
+                        switch (binary_node.operator) {
+                            .Greater => self.UGTS(res, left, right),
+                            .Less => self.ULTS(res, left, right),
+                            .GreaterEqual => self.UGES(res, left, right),
+                            .LessEqual => self.ULES(res, left, right),
+                            else => unreachable,
+                        }
                     } else {
                         switch (binary_node.operator) {
                             .Greater => self.GTS(res, left, right),
@@ -2932,29 +2964,37 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                             .LessEqual => self.LES(res, left, right),
                             else => unreachable,
                         }
-
-                        self.wrap(.Bool, res, res);
                     }
+
+                    self.wrap(.Bool, res, res);
                 },
                 .Plus => {
                     switch (binary_node.left.type_def.?.def_type) {
-                        .Integer, .Float => {
+                        .Integer, .UnsignedInteger, .Float => {
                             if (left_type_def == .Float or right_type_def == .Float) {
-                                if (left_type_def == .Integer) {
+                                if (left_type_def == .Integer or left_type_def == .UnsignedInteger) {
                                     const left_f = m.MIR_new_reg_op(
                                         self.ctx,
                                         try self.REG("left_float", m.MIR_T_D),
                                     );
-                                    self.I2D(left_f, left);
+                                    if (left_type_def == .Integer) {
+                                        self.I2D(left_f, left);
+                                    } else {
+                                        self.UI2D(left_f, left);
+                                    }
                                     left = left_f;
                                 }
 
-                                if (right_type_def == .Integer) {
+                                if (right_type_def == .Integer or right_type_def == .UnsignedInteger) {
                                     const right_f = m.MIR_new_reg_op(
                                         self.ctx,
                                         try self.REG("right_float", m.MIR_T_D),
                                     );
-                                    self.I2D(right_f, right);
+                                    if (right_type_def == .Integer) {
+                                        self.I2D(right_f, right);
+                                    } else {
+                                        self.UI2D(right_f, right);
+                                    }
                                     right = right_f;
                                 }
 
@@ -2963,13 +3003,12 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                                     try self.REG("f_res", m.MIR_T_D),
                                 );
                                 self.DADD(f_res, left, right);
-
-                                self.wrap(.Float, f_res, res);
+                                res = f_res;
                             } else {
                                 self.ADDS(res, left, right);
-
-                                self.wrap(.Integer, res, res);
                             }
+
+                            self.wrap(binary_node.node.type_def.?.def_type, res, res);
                         },
                         .String => {
                             try self.buildExternApiCall(
@@ -3032,13 +3071,12 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                             try self.REG("f_res", m.MIR_T_D),
                         );
                         self.DSUB(f_res, left, right);
-
-                        self.wrap(.Float, f_res, res);
+                        res = f_res;
                     } else {
                         self.SUBS(res, left, right);
-
-                        self.wrap(.Integer, res, res);
                     }
+
+                    self.wrap(binary_node.node.type_def.?.def_type, res, res);
                 },
                 .Star => {
                     if (left_type_def == .Float or right_type_def == .Float) {
@@ -3065,13 +3103,13 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                             try self.REG("f_res", m.MIR_T_D),
                         );
                         self.DMUL(f_res, left, right);
-
-                        self.wrap(.Float, f_res, res);
+                        res = f_res;
                     } else {
+                        // FIXME: mir.md says MIR_UMULS exists, but its not in the code
                         self.MULS(res, left, right);
-
-                        self.wrap(.Integer, res, res);
                     }
+
+                    self.wrap(binary_node.node.type_def.?.def_type, res, res);
                 },
                 .Slash => {
                     if (left_type_def == .Float or right_type_def == .Float) {
@@ -3099,31 +3137,33 @@ fn generateBinary(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
                         );
                         self.DDIV(f_res, left, right);
 
-                        self.wrap(.Float, f_res, res);
+                        res = f_res;
+                    } else if (left_type_def == .UnsignedInteger or right_type_def == .UnsignedInteger) {
+                        self.UDIVS(res, left, right);
                     } else {
                         self.DIVS(res, left, right);
-
-                        self.wrap(.Integer, res, res);
                     }
+                    self.wrap(binary_node.node.type_def.?.def_type, res, res);
                 },
                 .Percent => {
                     if (left_type_def == .Float or right_type_def == .Float) {
                         // FIXME: mir doesn't seem to have a mod/rem for floats?
                         unreachable;
+                    } else if (left_type_def == .UnsignedInteger or right_type_def == .UnsignedInteger) {
+                        self.UMODS(res, left, right);
                     } else {
                         self.MODS(res, left, right);
-
-                        self.wrap(.Integer, res, res);
                     }
+                    self.wrap(binary_node.node.type_def.?.def_type, res, res);
                 },
                 else => unreachable,
             }
 
-            if (left_type_def != .Integer and left_type_def != .Float) {
+            if (left_type_def != .Integer and left_type_def != .UnsignedInteger and left_type_def != .Float) {
                 try self.buildPop(null);
             }
 
-            if (right_type_def != .Integer and right_type_def != .Float) {
+            if (right_type_def != .Integer and right_type_def != .UnsignedInteger and right_type_def != .Float) {
                 try self.buildPop(null);
             }
 
@@ -3184,26 +3224,26 @@ fn generateBitwise(self: *Self, binary_node: *n.BinaryNode) Error!?m.MIR_op_t {
     );
 
     try self.unwrap(
-        .Integer,
+        binary_node.left.type_def.?.def_type,
         (try self.generateNode(binary_node.left)).?,
         left,
     );
     try self.unwrap(
-        .Integer,
+        binary_node.right.type_def.?.def_type,
         (try self.generateNode(binary_node.right)).?,
         right,
     );
 
     switch (binary_node.operator) {
-        .Ampersand => self.AND(res, left, right),
-        .Bor => self.OR(res, left, right),
-        .Xor => self.XOR(res, left, right),
-        .ShiftLeft => self.SHL(res, left, right),
-        .ShiftRight => self.SHR(res, left, right),
+        .Ampersand => self.ANDS(res, left, right),
+        .Bor => self.ORS(res, left, right),
+        .Xor => self.XORS(res, left, right),
+        .ShiftLeft => self.SHLS(res, left, right),
+        .ShiftRight => self.SHRS(res, left, right),
         else => unreachable,
     }
 
-    self.wrap(.Integer, res, res);
+    self.wrap(binary_node.node.type_def.?.def_type, res, res);
 
     return res;
 }
@@ -4351,9 +4391,9 @@ fn generateUnary(self: *Self, unary_node: *n.UnaryNode) Error!?m.MIR_op_t {
 
     switch (unary_node.operator) {
         .Bnot => {
-            try self.unwrap(.Integer, left, result);
+            try self.unwrap(unary_node.left.type_def.?.def_type, left, result);
             self.NOTS(result, result);
-            self.wrap(.Integer, result, result);
+            self.wrap(unary_node.left.type_def.?.def_type, result, result);
         },
         .Bang => {
             try self.unwrap(.Bool, left, result);
@@ -4384,9 +4424,9 @@ fn generateUnary(self: *Self, unary_node: *n.UnaryNode) Error!?m.MIR_op_t {
             self.append(out_label);
         },
         .Minus => {
-            try self.unwrap(.Integer, left, result);
+            try self.unwrap(unary_node.left.type_def.?.def_type, left, result);
 
-            if (unary_node.left.type_def.?.def_type == .Integer) {
+            if (unary_node.left.type_def.?.def_type == .Integer or unary_node.left.type_def.?.def_type == .UnsignedInteger) {
                 self.NEGS(result, result);
             } else {
                 self.DNEG(result, result);
@@ -4966,6 +5006,21 @@ inline fn GTS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t
     );
 }
 
+inline fn UGTS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_UGTS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
 inline fn DGT(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
         m.MIR_new_insn_arr(
@@ -5001,6 +5056,21 @@ inline fn LTS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t
         m.MIR_new_insn_arr(
             self.ctx,
             m.MIR_LTS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn ULTS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ULTS,
             3,
             &[_]m.MIR_op_t{
                 dest,
@@ -5056,6 +5126,21 @@ inline fn GES(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t
     );
 }
 
+inline fn UGES(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_UGES,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
 inline fn DGE(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
         m.MIR_new_insn_arr(
@@ -5091,6 +5176,21 @@ inline fn LES(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t
         m.MIR_new_insn_arr(
             self.ctx,
             m.MIR_LES,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn ULES(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ULES,
             3,
             &[_]m.MIR_op_t{
                 dest,
@@ -5206,221 +5306,406 @@ inline fn JMP(self: *Self, label: m.MIR_insn_t) void {
 
 inline fn ADD(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_ADD, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ADD,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DADD(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DADD, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DADD,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn ADDS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_ADDS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ADDS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn SUB(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_SUB, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_SUB,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn SUBS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_SUBS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_SUBS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DSUB(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DSUB, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DSUB,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn MUL(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_MUL, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_MUL,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn MULS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_MULS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_MULS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DMUL(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DMUL, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DMUL,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DIV(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DIV, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DIV,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DIVS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DIVS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DIVS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn UDIVS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_UDIVS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn DDIV(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_DDIV, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_DDIV,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn MOD(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_MOD, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_MOD,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn MODS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_MODS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_MODS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn UMODS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_UMODS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn AND(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_AND, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_AND,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn ANDS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_ANDS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ANDS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn OR(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_OR, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_OR,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn ORS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_ORS, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_ORS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn XOR(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_XOR, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_XOR,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn XORS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_XORS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn SHLS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_LSHS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn SHL(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_LSH, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_LSH,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn SHR(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_RSH, 3, &[_]m.MIR_op_t{
-            dest,
-            left,
-            right,
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_RSH,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
+    );
+}
+
+inline fn SHRS(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_RSHS,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                left,
+                right,
+            },
+        ),
     );
 }
 
 inline fn NOT(self: *Self, dest: m.MIR_op_t, value: m.MIR_op_t) void {
     self.append(
-        m.MIR_new_insn_arr(self.ctx, m.MIR_XOR, 3, &[_]m.MIR_op_t{
-            dest,
-            value,
-            m.MIR_new_uint_op(self.ctx, std.math.maxInt(u64)),
-        }),
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_XOR,
+            3,
+            &[_]m.MIR_op_t{
+                dest,
+                value,
+                m.MIR_new_uint_op(self.ctx, std.math.maxInt(u64)),
+            },
+        ),
     );
 }
 
@@ -5444,6 +5729,20 @@ inline fn I2D(self: *Self, dest: m.MIR_op_t, value: m.MIR_op_t) void {
         m.MIR_new_insn_arr(
             self.ctx,
             m.MIR_I2D,
+            2,
+            &[_]m.MIR_op_t{
+                dest,
+                value,
+            },
+        ),
+    );
+}
+
+inline fn UI2D(self: *Self, dest: m.MIR_op_t, value: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_UI2D,
             2,
             &[_]m.MIR_op_t{
                 dest,

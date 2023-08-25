@@ -10,9 +10,9 @@ fun Av([float] x, [float] y, int N) > void {
     for (float i = 0.0; i < N; i = i + 1.0) {
         float a = 0.0;
         for (float j = 0.0; j < N; j = j + 1.0) {
-            a = a + x[toInt(j)] * A(i: i, j: j);
+            a = a + x[floatToInt(j)] * A(i: i, j: j);
         }
-        y[toInt(i)] = a;
+        y[floatToInt(i)] = a;
     }
 }
 
@@ -20,9 +20,9 @@ fun Atv([float] x, [float] y, int N) > void {
     for (float i = 0.0; i < N; i = i + 1.0) {
         float a = 0.0;
         for (float j = 0.0; j < N; j = j + 1.0) {
-            a = a + x[toInt(j)] * A(i: j, j: i);
+            a = a + x[floatToInt(j)] * A(i: j, j: i);
         }
-        y[toInt(i)] = a;
+        y[floatToInt(i)] = a;
     }
 }
 

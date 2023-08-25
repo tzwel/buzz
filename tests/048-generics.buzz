@@ -1,6 +1,6 @@
 import "std";
 
-fun count(<T>, [T] list) > int {
+fun count(<T>, [T] list) > uint {
     return list.len();
 }
 
@@ -18,7 +18,7 @@ test "Generic within anonymous object" {
     assert(extractList(<int>, .{ list = list }) == list, message: "could use generic within anonymous object");
 }
 
-fun countMap(<K, V>, {K, V} map) > int {
+fun countMap(<K, V>, {K, V} map) > uint {
     return map.size();
 }
 

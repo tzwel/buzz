@@ -19,11 +19,9 @@ const basic_types = std.ComptimeStringMap(
         .{ "u16", .{ .def_type = .Integer } },
         .{ "i16", .{ .def_type = .Integer } },
         .{ "i32", .{ .def_type = .Integer } },
-
-        // Could it be > 32bits one some systems?
         .{ "c_int", .{ .def_type = .Integer } },
+        .{ "c_uint", .{ .def_type = .UnsignedInteger } },
 
-        .{ "c_uint", .{ .def_type = .Float } },
         .{ "u32", .{ .def_type = .Float } },
         .{ "i64", .{ .def_type = .Float } },
         .{ "f32", .{ .def_type = .Float } },
@@ -33,7 +31,6 @@ const basic_types = std.ComptimeStringMap(
         .{ "usize", .{ .def_type = .UserData } },
 
         .{ "bool", .{ .def_type = .Bool } },
-
         .{ "void", .{ .def_type = .Void } },
     },
 );
@@ -227,7 +224,7 @@ pub fn parseTypeExpr(self: *Self, ztype: []const u8) !?*Zdef {
 
 pub fn parse(self: *Self, parser: ?*p.Parser, source: t.Token, parsing_type_expr: bool) !?*Zdef {
     // TODO: maybe an Arena allocator for those kinds of things that can live for the whole process lifetime
-    const duped = self.gc.allocator.dupeZ(u8, source.literal_string.?) catch @panic("Out of memory");
+    const duped = self.gc.allocator.dupeZ(u8, source.str.?) catch @panic("Out of memory");
     // defer self.gc.allocator.free(duped);
 
     self.state = .{

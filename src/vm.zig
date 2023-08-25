@@ -17,7 +17,6 @@ const Reporter = @import("./reporter.zig");
 const FFI = @import("./ffi.zig");
 
 const Value = _value.Value;
-const floatToInteger = _value.floatToInteger;
 const valueToString = _value.valueToString;
 const valueToStringAlloc = _value.valueToStringAlloc;
 const valueEql = _value.valueEql;
@@ -1875,9 +1874,11 @@ pub const VM = struct {
 
     fn OP_GET_LIST_SUBSCRIPT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         var list: *ObjList = self.peek(1).obj().access(ObjList, .List, self.gc).?;
-        const index = self.peek(0).integer();
+        const index_value = self.peek(0);
+        const index_i = if (index_value.isInteger()) index_value.integer() else null;
+        const index_u = if (index_value.isUnsigned()) index_value.unsigned() else null;
 
-        if (index < 0) {
+        if (index_i != null and index_i.? < 0) {
             self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
                 panic(e);
                 unreachable;
@@ -1887,7 +1888,7 @@ pub const VM = struct {
             };
         }
 
-        const list_index: usize = @intCast(index);
+        const list_index: usize = if (index_i) |i| @intCast(i) else @intCast(index_u.?);
 
         if (list_index >= list.items.items.len) {
             self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
@@ -1925,8 +1926,8 @@ pub const VM = struct {
     }
 
     fn OP_GET_MAP_SUBSCRIPT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        var map: *ObjMap = self.peek(1).obj().access(ObjMap, .Map, self.gc).?;
-        var index: Value = floatToInteger(self.peek(0));
+        const map: *ObjMap = self.peek(1).obj().access(ObjMap, .Map, self.gc).?;
+        const index: Value = self.peek(0);
 
         // Pop map and key
         _ = self.pop();
@@ -1955,9 +1956,11 @@ pub const VM = struct {
 
     fn OP_GET_STRING_SUBSCRIPT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         var str = self.peek(1).obj().access(ObjString, .String, self.gc).?;
-        const index = self.peek(0).integer();
+        const index_value = self.peek(0);
+        const index_i = if (index_value.isInteger()) index_value.integer() else null;
+        const index_u = if (index_value.isUnsigned()) index_value.unsigned() else null;
 
-        if (index < 0) {
+        if (index_i != null and index_i.? < 0) {
             self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound string access.") catch |e| {
                 panic(e);
                 unreachable;
@@ -1967,7 +1970,7 @@ pub const VM = struct {
             };
         }
 
-        const str_index: usize = @intCast(index);
+        const str_index: usize = if (index_i) |i| @intCast(i) else @intCast(index_u.?);
 
         if (str_index < str.string.len) {
             var str_item: Value = (self.gc.copyString(&([_]u8{str.string[str_index]})) catch |e| {
@@ -2007,10 +2010,12 @@ pub const VM = struct {
 
     fn OP_SET_LIST_SUBSCRIPT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         var list = self.peek(2).obj().access(ObjList, .List, self.gc).?;
-        const index = self.peek(1);
+        const index_value = self.peek(1);
+        const index_i = if (index_value.isInteger()) index_value.integer() else null;
+        const index_u = if (index_value.isUnsigned()) index_value.unsigned() else null;
         const value = self.peek(0);
 
-        if (index.integer() < 0) {
+        if (index_i != null and index_i.? < 0) {
             self.throw(Error.OutOfBound, (self.gc.copyString("Out of bound list access.") catch |e| {
                 panic(e);
                 unreachable;
@@ -2020,7 +2025,7 @@ pub const VM = struct {
             };
         }
 
-        const list_index: usize = @intCast(index.integer());
+        const list_index: usize = if (index_i) |i| @intCast(i) else @intCast(index_u.?);
 
         if (list_index < list.items.items.len) {
             list.set(self.gc, list_index, value) catch |e| {
@@ -2743,8 +2748,12 @@ pub const VM = struct {
 
     fn OP_BNOT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
         const value = self.pop();
+        const unsigned = if (value.isUnsigned()) ~value.unsigned() else null;
+        const int = if (value.isInteger()) ~value.integer() else null;
 
-        self.push(Value.fromInteger(~(if (value.isInteger()) value.integer() else @as(i32, @intFromFloat(value.float())))));
+        self.push(
+            if (unsigned) |u| Value.fromUnsigned(u) else Value.fromInteger(int.?),
+        );
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -2761,25 +2770,31 @@ pub const VM = struct {
     }
 
     fn OP_GREATER(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right_value = floatToInteger(self.pop());
-        const left_value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const left_f: ?f64 = if (left_value.isFloat()) left_value.float() else null;
-        const left_i: ?i32 = if (left_value.isInteger()) left_value.integer() else null;
-        const right_f: ?f64 = if (right_value.isFloat()) right_value.float() else null;
-        const right_i: ?i32 = if (right_value.isInteger()) right_value.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (left_f) |lf| {
             if (right_f) |rf| {
                 self.push(Value.fromBoolean(lf > rf));
             } else {
-                self.push(Value.fromBoolean(lf > @as(f64, @floatFromInt(right_i.?))));
+                const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                self.push(Value.fromBoolean(lf > casted_right));
             }
         } else {
             if (right_f) |rf| {
-                self.push(Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) > rf));
+                const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                self.push(Value.fromBoolean(casted_left > rf));
             } else {
-                self.push(Value.fromBoolean(left_i.? > right_i.?));
+                const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                self.push(Value.fromBoolean(left > right));
             }
         }
 
@@ -2798,25 +2813,31 @@ pub const VM = struct {
     }
 
     fn OP_LESS(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right_value = floatToInteger(self.pop());
-        const left_value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const left_f: ?f64 = if (left_value.isFloat()) left_value.float() else null;
-        const left_i: ?i32 = if (left_value.isInteger()) left_value.integer() else null;
-        const right_f: ?f64 = if (right_value.isFloat()) right_value.float() else null;
-        const right_i: ?i32 = if (right_value.isInteger()) right_value.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (left_f) |lf| {
             if (right_f) |rf| {
                 self.push(Value.fromBoolean(lf < rf));
             } else {
-                self.push(Value.fromBoolean(lf < @as(f64, @floatFromInt(right_i.?))));
+                const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                self.push(Value.fromBoolean(lf < casted_right));
             }
         } else {
             if (right_f) |rf| {
-                self.push(Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) < rf));
+                const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                self.push(Value.fromBoolean(casted_left < rf));
             } else {
-                self.push(Value.fromBoolean(left_i.? < right_i.?));
+                const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                self.push(Value.fromBoolean(left < right));
             }
         }
 
@@ -2938,19 +2959,29 @@ pub const VM = struct {
     }
 
     fn OP_ADD(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (right_f != null or left_f != null) {
-            self.push(Value.fromFloat((left_f orelse @as(f64, @floatFromInt(left_i.?)) + (right_f orelse @as(f64, @floatFromInt(right_i.?))))));
+            self.push(
+                Value.fromFloat(
+                    (left_f orelse @as(f64, @floatFromInt(left_i.?)) + (right_f orelse @as(f64, @floatFromInt(right_i.?)))),
+                ),
+            );
+        } else if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? +% right_u.?),
+            );
         } else {
             // both integers
-            self.push(Value.fromInteger(left_i.? + right_i.?));
+            self.push(Value.fromInteger(left_i.? +% right_i.?));
         }
 
         const next_full_instruction: u32 = self.readInstruction();
@@ -2968,18 +2999,29 @@ pub const VM = struct {
     }
 
     fn OP_SUBTRACT(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (right_f != null or left_f != null) {
-            self.push(Value.fromFloat((left_f orelse @as(f64, @floatFromInt(left_i.?))) - (right_f orelse @as(f64, @floatFromInt(right_i.?)))));
+            self.push(
+                Value.fromFloat(
+                    (left_f orelse @as(f64, @floatFromInt(left_i.?)) - (right_f orelse @as(f64, @floatFromInt(right_i.?)))),
+                ),
+            );
+        } else if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? -% right_u.?),
+            );
         } else {
-            self.push(Value.fromInteger(left_i.? - right_i.?));
+            // both integers
+            self.push(Value.fromInteger(left_i.? -% right_i.?));
         }
 
         const next_full_instruction: u32 = self.readInstruction();
@@ -2997,18 +3039,29 @@ pub const VM = struct {
     }
 
     fn OP_MULTIPLY(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (right_f != null or left_f != null) {
-            self.push(Value.fromFloat((left_f orelse @as(f64, @floatFromInt(left_i.?))) * (right_f orelse @as(f64, @floatFromInt(right_i.?)))));
+            self.push(
+                Value.fromFloat(
+                    (left_f orelse @as(f64, @floatFromInt(left_i.?)) * (right_f orelse @as(f64, @floatFromInt(right_i.?)))),
+                ),
+            );
+        } else if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? *% right_u.?),
+            );
         } else {
-            self.push(Value.fromInteger(left_i.? * right_i.?));
+            // both integers
+            self.push(Value.fromInteger(left_i.? *% right_i.?));
         }
 
         const next_full_instruction: u32 = self.readInstruction();
@@ -3026,17 +3079,42 @@ pub const VM = struct {
     }
 
     fn OP_DIVIDE(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
-        self.push(
-            Value.fromFloat((left_f orelse @as(f64, @floatFromInt(left_i.?))) / (right_f orelse @as(f64, @floatFromInt(right_i.?)))),
-        );
+        if (right_f != null or left_f != null) {
+            self.push(
+                Value.fromFloat(
+                    (left_f orelse @as(f64, @floatFromInt(left_i.?)) / (right_f orelse @as(f64, @floatFromInt(right_i.?)))),
+                ),
+            );
+        } else if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(
+                    @divFloor(
+                        left_u.?,
+                        right_u.?,
+                    ),
+                ),
+            );
+        } else {
+            // both integers
+            self.push(
+                Value.fromInteger(
+                    @divFloor(
+                        left_i.?,
+                        right_i.?,
+                    ),
+                ),
+            );
+        }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -3053,18 +3131,44 @@ pub const VM = struct {
     }
 
     fn OP_MOD(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value = self.pop();
+        const left_value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const left_f: ?f64 = left_value.floatOrNull();
+        const left_i: ?i32 = left_value.integerOrNull();
+        const right_f: ?f64 = right_value.floatOrNull();
+        const right_i: ?i32 = right_value.integerOrNull();
+        const left_u: ?u32 = left_value.unsignedOrNull();
+        const right_u: ?u32 = right_value.unsignedOrNull();
 
         if (right_f != null or left_f != null) {
-            self.push(Value.fromFloat(@mod((left_f orelse @as(f64, @floatFromInt(left_i.?))), (right_f orelse @as(f64, @floatFromInt(right_i.?))))));
+            self.push(
+                Value.fromFloat(
+                    @mod(
+                        (left_f orelse @as(f64, @floatFromInt(left_i.?))),
+                        (right_f orelse @as(f64, @floatFromInt(right_i.?))),
+                    ),
+                ),
+            );
+        } else if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(
+                    @mod(
+                        left_u.?,
+                        right_u.?,
+                    ),
+                ),
+            );
         } else {
-            self.push(Value.fromInteger(@mod(left_i.?, right_i.?)));
+            // both integers
+            self.push(
+                Value.fromInteger(
+                    @mod(
+                        left_i.?,
+                        right_i.?,
+                    ),
+                ),
+            );
         }
 
         const next_full_instruction: u32 = self.readInstruction();
@@ -3082,15 +3186,23 @@ pub const VM = struct {
     }
 
     fn OP_BAND(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right: Value = self.pop();
+        const left: Value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const right_i: ?i32 = right.integerOrNull();
+        const left_i: ?i32 = left.integerOrNull();
+        const right_u: ?u32 = right.unsignedOrNull();
+        const left_u: ?u32 = left.unsignedOrNull();
 
-        self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) & (right_i orelse @as(i32, @intFromFloat(right_f.?)))));
+        if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? & right_u.?),
+            );
+        } else {
+            self.push(
+                Value.fromInteger(left_i.? & right_i.?),
+            );
+        }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -3107,15 +3219,23 @@ pub const VM = struct {
     }
 
     fn OP_BOR(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right: Value = self.pop();
+        const left: Value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
+        const right_i: ?i32 = right.integerOrNull();
+        const left_i: ?i32 = left.integerOrNull();
+        const right_u: ?u32 = right.unsignedOrNull();
+        const left_u: ?u32 = left.unsignedOrNull();
 
-        self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) | (right_i orelse @as(i32, @intFromFloat(right_f.?)))));
+        if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? | right_u.?),
+            );
+        } else {
+            self.push(
+                Value.fromInteger(left_i.? | right_i.?),
+            );
+        }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -3132,14 +3252,23 @@ pub const VM = struct {
     }
 
     fn OP_XOR(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right: Value = self.pop();
+        const left: Value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
-        self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) ^ (right_i orelse @as(i32, @intFromFloat(right_f.?)))));
+        const right_i: ?i32 = right.integerOrNull();
+        const left_i: ?i32 = left.integerOrNull();
+        const right_u: ?u32 = right.unsignedOrNull();
+        const left_u: ?u32 = left.unsignedOrNull();
+
+        if (right_u != null) {
+            self.push(
+                Value.fromUnsigned(left_u.? ^ right_u.?),
+            );
+        } else {
+            self.push(
+                Value.fromInteger(left_i.? ^ right_i.?),
+            );
+        }
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -3156,26 +3285,45 @@ pub const VM = struct {
     }
 
     fn OP_SHL(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value: Value = self.pop();
+        const left_value: Value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
-        const b: i32 = right_i orelse @intFromFloat(right_f.?);
+        const right_i = right_value.integerOrNull();
+        const left_i = left_value.integerOrNull();
+        const right_u = right_value.unsignedOrNull();
+        const left_u = left_value.unsignedOrNull();
 
-        if (b < 0) {
-            if (b * -1 > std.math.maxInt(u5)) {
-                self.push(Value.fromInteger(0));
+        if (right_i != null) {
+            if (right_i.? < 0) {
+                const b = right_i.? * -1;
+
+                if (b > std.math.maxInt(u5)) {
+                    self.push(Value.fromInteger(0));
+                } else {
+                    self.push(Value.fromInteger(
+                        left_i.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                    ));
+                }
             } else {
-                self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) >> @as(u5, @truncate(@as(u64, @intCast(b * -1))))));
+                const b = right_i.?;
+
+                if (b > std.math.maxInt(u5)) {
+                    self.push(Value.fromInteger(0));
+                } else {
+                    self.push(Value.fromInteger(
+                        left_i.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                    ));
+                }
             }
         } else {
+            const b = right_u.?;
+
             if (b > std.math.maxInt(u5)) {
-                self.push(Value.fromInteger(0));
+                self.push(Value.fromUnsigned(0));
             } else {
-                self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) << @as(u5, @truncate(@as(u64, @intCast(b))))));
+                self.push(Value.fromUnsigned(
+                    left_u.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                ));
             }
         }
 
@@ -3194,26 +3342,45 @@ pub const VM = struct {
     }
 
     fn OP_SHR(self: *Self, _: *CallFrame, _: u32, _: OpCode, _: u24) void {
-        const right: Value = floatToInteger(self.pop());
-        const left: Value = floatToInteger(self.pop());
+        const right_value: Value = self.pop();
+        const left_value: Value = self.pop();
 
-        const right_f: ?f64 = if (right.isFloat()) right.float() else null;
-        const left_f: ?f64 = if (left.isFloat()) left.float() else null;
-        const right_i: ?i32 = if (right.isInteger()) right.integer() else null;
-        const left_i: ?i32 = if (left.isInteger()) left.integer() else null;
-        const b: i32 = right_i orelse @intFromFloat(right_f.?);
+        const right_i = right_value.integerOrNull();
+        const left_i = left_value.integerOrNull();
+        const right_u = right_value.unsignedOrNull();
+        const left_u = left_value.unsignedOrNull();
 
-        if (b < 0) {
-            if (b * -1 > std.math.maxInt(u5)) {
-                self.push(Value.fromInteger(0));
+        if (right_i != null) {
+            if (right_i.? < 0) {
+                const b = right_i.? * -1;
+
+                if (b > std.math.maxInt(u5)) {
+                    self.push(Value.fromInteger(0));
+                } else {
+                    self.push(Value.fromInteger(
+                        left_i.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                    ));
+                }
             } else {
-                self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) << @as(u5, @truncate(@as(u64, @intCast(b * -1))))));
+                const b = right_i.?;
+
+                if (b > std.math.maxInt(u5)) {
+                    self.push(Value.fromInteger(0));
+                } else {
+                    self.push(Value.fromInteger(
+                        left_i.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                    ));
+                }
             }
         } else {
+            const b = right_u.?;
+
             if (b > std.math.maxInt(u5)) {
-                self.push(Value.fromInteger(0));
+                self.push(Value.fromUnsigned(0));
             } else {
-                self.push(Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) >> @as(u5, @truncate(@as(u64, @intCast(b))))));
+                self.push(Value.fromUnsigned(
+                    left_u.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                ));
             }
         }
 
@@ -3342,16 +3509,16 @@ pub const VM = struct {
         const value_slot: *Value = @ptrCast(self.current_fiber.stack_top - 2);
         const str: *ObjString = self.peek(0).obj().access(ObjString, .String, self.gc).?;
 
-        key_slot.* = if (str.next(self, if (key_slot.*.isNull()) null else key_slot.integer()) catch |e| {
+        key_slot.* = if (str.next(self, key_slot.unsignedOrNull()) catch |e| {
             panic(e);
             unreachable;
         }) |new_index|
-            Value.fromInteger(new_index)
+            Value.fromUnsigned(new_index)
         else
             Value.Null;
 
         // Set new value
-        if (key_slot.*.isInteger()) {
+        if (key_slot.*.isUnsigned()) {
             value_slot.* = (self.gc.copyString(&([_]u8{str.string[@as(usize, @intCast(key_slot.integer()))]})) catch |e| {
                 panic(e);
                 unreachable;
@@ -3380,18 +3547,18 @@ pub const VM = struct {
         // Get next index
         key_slot.* = if (list.rawNext(
             self,
-            if (key_slot.*.isNull()) null else key_slot.integer(),
+            if (key_slot.*.isNull()) null else key_slot.unsigned(),
         ) catch |e| {
             panic(e);
             unreachable;
         }) |new_index|
-            Value.fromInteger(new_index)
+            Value.fromUnsigned(new_index)
         else
             Value.Null;
 
         // Set new value
-        if (key_slot.*.isInteger()) {
-            value_slot.* = list.items.items[@as(usize, @intCast(key_slot.integer()))];
+        if (key_slot.*.isUnsigned()) {
+            value_slot.* = list.items.items[@as(usize, @intCast(key_slot.unsigned()))];
         }
 
         const next_full_instruction: u32 = self.readInstruction();

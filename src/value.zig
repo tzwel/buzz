@@ -13,10 +13,11 @@ const ObjTypeDef = _obj.ObjTypeDef;
 const Tag = u3;
 pub const TagBoolean: Tag = 0;
 pub const TagInteger: Tag = 1;
-pub const TagNull: Tag = 2;
-pub const TagVoid: Tag = 3;
-pub const TagObj: Tag = 4;
-pub const TagError: Tag = 5;
+pub const TagUnsignedInteger: Tag = 2;
+pub const TagNull: Tag = 3;
+pub const TagVoid: Tag = 4;
+pub const TagObj: Tag = 5;
+pub const TagError: Tag = 6;
 
 /// Most significant bit.
 pub const SignMask: u64 = 1 << 63;
@@ -33,6 +34,7 @@ pub const TrueBitMask: u64 = 1;
 pub const TrueMask: u64 = BooleanMask | TrueBitMask;
 
 pub const IntegerMask: u64 = TaggedValueMask | (@as(u64, TagInteger) << 32);
+pub const UnsignedIntegerMask: u64 = TaggedValueMask | (@as(u64, TagUnsignedInteger) << 32);
 pub const NullMask: u64 = TaggedValueMask | (@as(u64, TagNull) << 32);
 pub const VoidMask: u64 = TaggedValueMask | (@as(u64, TagVoid) << 32);
 pub const ErrorMask: u64 = TaggedValueMask | (@as(u64, TagError) << 32);
@@ -58,6 +60,10 @@ pub const Value = packed struct {
         return .{ .val = IntegerMask | @as(u32, @bitCast(val)) };
     }
 
+    pub inline fn fromUnsigned(val: u32) Value {
+        return .{ .val = UnsignedIntegerMask | val };
+    }
+
     pub inline fn fromFloat(val: f64) Value {
         return .{ .val = @as(u64, @bitCast(val)) };
     }
@@ -78,12 +84,16 @@ pub const Value = packed struct {
         return self.val & (TaggedPrimitiveMask | SignMask) == IntegerMask;
     }
 
+    pub inline fn isUnsigned(self: Value) bool {
+        return self.val & (TaggedPrimitiveMask | SignMask) == UnsignedIntegerMask;
+    }
+
     pub inline fn isFloat(self: Value) bool {
         return self.val & TaggedValueMask != TaggedValueMask;
     }
 
     pub inline fn isNumber(self: Value) bool {
-        return self.isFloat() or self.isInteger();
+        return self.isFloat() or self.isInteger() or self.isUnsigned();
     }
 
     pub inline fn isObj(self: Value) bool {
@@ -106,16 +116,40 @@ pub const Value = packed struct {
         return self.val == TrueMask;
     }
 
+    pub inline fn booleanOrNull(self: Value) ?bool {
+        return if (self.isBool()) self.boolean() else null;
+    }
+
     pub inline fn integer(self: Value) i32 {
         return @as(i32, @bitCast(@as(u32, @intCast(self.val & 0xffffffff))));
     }
 
+    pub inline fn integerOrNull(self: Value) ?i32 {
+        return if (self.isInteger()) self.integer() else null;
+    }
+
+    pub inline fn unsigned(self: Value) u32 {
+        return @intCast(self.val & 0xffffffff);
+    }
+
+    pub inline fn unsignedOrNull(self: Value) ?u32 {
+        return if (self.isUnsigned()) self.unsigned() else null;
+    }
+
     pub inline fn float(self: Value) f64 {
-        return @as(f64, @bitCast(self.val));
+        return @bitCast(self.val);
+    }
+
+    pub inline fn floatOrNull(self: Value) ?f64 {
+        return if (self.isFloat()) self.float() else null;
     }
 
     pub inline fn obj(self: Value) *Obj {
         return @as(*Obj, @ptrFromInt(self.val & ~PointerMask));
+    }
+
+    pub inline fn objOrNull(self: Value) ?*Obj {
+        return if (self.isObj()) self.obj() else null;
     }
 
     pub fn typeOf(self: Value, gc: *GarbageCollector) !*ObjTypeDef {
@@ -132,6 +166,7 @@ pub const Value = packed struct {
                 .def_type = switch (self.getTag()) {
                     TagBoolean => .Bool,
                     TagInteger => .Integer,
+                    TagUnsignedInteger => .UnsignedInteger,
                     TagNull, TagVoid => .Void,
                     else => .Float,
                 },
@@ -139,32 +174,6 @@ pub const Value = packed struct {
         );
     }
 };
-
-test "NaN boxing" {
-    const boolean = Value.fromBoolean(true);
-    const integer = Value.fromInteger(42);
-    const float = Value.fromFloat(42.24);
-
-    std.debug.assert(boolean.isBool() and boolean.boolean());
-    std.debug.assert(integer.isInteger() and integer.integer() == 42);
-    std.debug.assert(float.isFloat() and float.float() == 42.24);
-    std.debug.assert(Value.Null.isNull());
-    std.debug.assert(Value.Void.isVoid());
-    std.debug.assert(Value.False.isBool());
-    std.debug.assert(Value.True.isBool());
-}
-
-// If nothing in its decimal part, will return a Value.Integer
-pub inline fn floatToInteger(value: Value) Value {
-    const float = if (value.isFloat()) value.float() else null;
-
-    // FIXME also check that the f64 can fit in the i32
-    if (float != null and @as(i64, @intFromFloat(float.?)) < std.math.maxInt(i32) and std.math.floor(float.?) == float.?) {
-        return Value.fromInteger(@as(i32, @intFromFloat(float.?)));
-    }
-
-    return value;
-}
 
 pub fn valueToStringAlloc(allocator: Allocator, value: Value) (Allocator.Error || std.fmt.BufPrintError)!std.ArrayList(u8) {
     var str = std.ArrayList(u8).init(allocator);
@@ -189,6 +198,7 @@ pub fn valueToString(writer: *const std.ArrayList(u8).Writer, value: Value) (All
     switch (value.getTag()) {
         TagBoolean => try writer.print("{}", .{value.boolean()}),
         TagInteger => try writer.print("{d}", .{value.integer()}),
+        TagUnsignedInteger => try writer.print("{d}", .{value.unsigned()}),
         TagNull => try writer.print("null", .{}),
         TagVoid => try writer.print("void", .{}),
         else => try writer.print("{d}", .{value.float()}),
@@ -208,27 +218,36 @@ pub fn valueEql(a: Value, b: Value) bool {
         return a.obj().eql(b.obj());
     }
 
-    if (a.isInteger() or a.isFloat()) {
-        const aa = floatToInteger(a);
-        const bb = floatToInteger(b);
+    if (a.isUnsigned() or a.isInteger() or a.isFloat()) {
+        const a_f: ?f64 = if (a.isFloat()) a.float() else null;
+        const b_f: ?f64 = if (b.isFloat()) b.float() else null;
+        const a_i: ?i32 = if (a.isInteger()) a.integer() else null;
+        const b_i: ?i32 = if (b.isInteger()) b.integer() else null;
+        const a_ui: ?u32 = if (a.isUnsigned()) a.unsigned() else null;
+        const b_ui: ?u32 = if (b.isUnsigned()) b.unsigned() else null;
 
-        const a_f: ?f64 = if (aa.isFloat()) aa.float() else null;
-        const b_f: ?f64 = if (bb.isFloat()) bb.float() else null;
-        const a_i: ?i32 = if (aa.isInteger()) aa.integer() else null;
-        const b_i: ?i32 = if (bb.isInteger()) bb.integer() else null;
-
-        if (a_f) |af| {
-            if (b_f) |bf| {
-                return af == bf;
-            } else {
-                return af == @as(f64, @floatFromInt(b_i.?));
-            }
+        if (a_f != null or b_f != null) {
+            return a_f orelse @as(
+                f64,
+                if (a_i) |ai|
+                    @floatFromInt(ai)
+                else
+                    @floatFromInt(a_ui.?),
+            ) == b_f orelse @as(
+                f64,
+                if (b_i) |bi|
+                    @floatFromInt(bi)
+                else
+                    @floatFromInt(b_ui.?),
+            );
+        } else if (a_ui != null and b_ui != null) {
+            return a_ui.? == b_ui.?;
+        } else if (a_ui != null) {
+            return a_ui.? == b_i.?;
+        } else if (b_ui != null) {
+            return a_i.? == b_ui.?;
         } else {
-            if (b_f) |bf| {
-                return @as(f64, @floatFromInt(a_i.?)) == bf;
-            } else {
-                return a_i.? == b_i.?;
-            }
+            return a_i.? == b_i.?;
         }
     }
 
@@ -254,6 +273,7 @@ pub fn valueIs(type_def_val: Value, value: Value) bool {
     return switch (value.getTag()) {
         TagBoolean => type_def.def_type == .Bool,
         TagInteger => type_def.def_type == .Integer,
+        TagUnsignedInteger => type_def.def_type == .UnsignedInteger,
         // TODO: this one is ambiguous at runtime, is it the `null` constant? or an optional local with a null value?
         TagNull => type_def.def_type == .Void or type_def.optional,
         TagVoid => type_def.def_type == .Void,
@@ -273,6 +293,7 @@ pub fn valueTypeEql(value: Value, type_def: *ObjTypeDef) bool {
     return switch (value.getTag()) {
         TagBoolean => type_def.def_type == .Bool,
         TagInteger => type_def.def_type == .Integer,
+        TagUnsignedInteger => type_def.def_type == .UnsignedInteger,
         // TODO: this one is ambiguous at runtime, is it the `null` constant? or an optional local with a null value?
         TagNull => type_def.def_type == .Void or type_def.optional,
         TagVoid => type_def.def_type == .Void,

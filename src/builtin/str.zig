@@ -7,7 +7,6 @@ const NativeCtx = _obj.NativeCtx;
 const VM = @import("../vm.zig").VM;
 const _value = @import("../value.zig");
 const Value = _value.Value;
-const floatToInteger = _value.floatToInteger;
 
 pub fn trim(ctx: *NativeCtx) c_int {
     const str: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
@@ -25,67 +24,58 @@ pub fn trim(ctx: *NativeCtx) c_int {
 pub fn len(ctx: *NativeCtx) c_int {
     const str: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
-    ctx.vm.push(Value.fromInteger(@as(i32, @intCast(str.string.len))));
+    ctx.vm.push(Value.fromUnsigned(@intCast(str.string.len)));
 
     return 1;
 }
 
 pub fn repeat(ctx: *NativeCtx) c_int {
     const str = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    const n = floatToInteger(ctx.vm.peek(0));
-    const n_i = if (n.isInteger()) n.integer() else null;
+    const n = ctx.vm.peek(0).unsigned();
 
-    if (n_i) |ni| {
-        var new_string: std.ArrayList(u8) = std.ArrayList(u8).init(ctx.vm.gc.allocator);
-        var i: usize = 0;
-        while (i < ni) : (i += 1) {
-            new_string.appendSlice(str.string) catch @panic("Could not create string");
-        }
-
-        const new_objstring = ctx.vm.gc.copyString(new_string.items) catch @panic("Could not create string");
-
-        ctx.vm.push(new_objstring.toValue());
-
-        return 1;
+    var new_string: std.ArrayList(u8) = std.ArrayList(u8).init(ctx.vm.gc.allocator);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        new_string.appendSlice(str.string) catch @panic("Could not create string");
     }
 
-    var err: ?*ObjString = ctx.vm.gc.copyString("`n` should be an integer") catch null;
-    ctx.vm.push(if (err) |uerr| uerr.toValue() else Value.fromBoolean(false));
+    const new_objstring = ctx.vm.gc.copyString(new_string.items) catch @panic("Could not create string");
 
-    return -1;
+    ctx.vm.push(new_objstring.toValue());
+
+    return 1;
 }
 
 pub fn byte(ctx: *NativeCtx) c_int {
     const self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    const index = floatToInteger(ctx.vm.peek(0));
-    const index_i = if (index.isInteger()) index.integer() else null;
+    const index = ctx.vm.peek(0).unsigned();
 
-    if (index_i == null or index_i.? < 0 or index_i.? >= self.string.len) {
+    if (index >= self.string.len) {
         var err: ?*ObjString = ctx.vm.gc.copyString("Out of bound access to str") catch null;
         ctx.vm.push(if (err) |uerr| uerr.toValue() else Value.fromBoolean(false));
 
         return -1;
     }
 
-    ctx.vm.push(Value.fromInteger(@intCast(self.string[@as(usize, @intCast(index_i.?))])));
+    ctx.vm.push(Value.fromUnsigned(@intCast(self.string[@as(usize, @intCast(index))])));
 
     return 1;
 }
 
 pub fn indexOf(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    var needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
+    const needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
-    var index = std.mem.indexOf(u8, self.string, needle.string);
+    const index = std.mem.indexOf(u8, self.string, needle.string);
 
-    ctx.vm.push(if (index) |uindex| Value.fromInteger(@intCast(uindex)) else Value.Null);
+    ctx.vm.push(if (index) |uindex| Value.fromUnsigned(@intCast(uindex)) else Value.Null);
 
     return 1;
 }
 
 pub fn startsWith(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    var needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
+    const needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
     ctx.vm.push(Value.fromBoolean(std.mem.startsWith(u8, self.string, needle.string)));
 
@@ -93,8 +83,8 @@ pub fn startsWith(ctx: *NativeCtx) c_int {
 }
 
 pub fn endsWith(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    var needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
+    const needle: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
     ctx.vm.push(Value.fromBoolean(std.mem.endsWith(u8, self.string, needle.string)));
 
@@ -102,11 +92,17 @@ pub fn endsWith(ctx: *NativeCtx) c_int {
 }
 
 pub fn replace(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(2).obj()).?;
-    var needle: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    var replacement: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(2).obj()).?;
+    const needle: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
+    const replacement: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
-    const new_string = std.mem.replaceOwned(u8, ctx.vm.gc.allocator, self.string, needle.string, replacement.string) catch @panic("Could not create string");
+    const new_string = std.mem.replaceOwned(
+        u8,
+        ctx.vm.gc.allocator,
+        self.string,
+        needle.string,
+        replacement.string,
+    ) catch @panic("Could not create string");
 
     ctx.vm.push(
         (ctx.vm.gc.copyString(new_string) catch @panic("Could not create string")).toValue(),
@@ -116,33 +112,19 @@ pub fn replace(ctx: *NativeCtx) c_int {
 }
 
 pub fn sub(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(2).obj()).?;
-    var start_value = floatToInteger(ctx.vm.peek(1));
-    var start: ?i32 = if (start_value.isInteger()) start_value.integer() else null;
-    var upto_value: Value = floatToInteger(ctx.vm.peek(0));
-    var upto: ?i32 = if (upto_value.isInteger())
-        upto_value.integer()
-    else if (upto_value.isFloat())
-        @intFromFloat(upto_value.float())
-    else
-        null;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(2).obj()).?;
+    const start = ctx.vm.peek(1).unsigned();
+    const upto = ctx.vm.peek(0).unsignedOrNull();
 
-    if (start == null or start.? < 0 or start.? >= self.string.len) {
+    if (start >= self.string.len) {
         var err: ?*ObjString = ctx.vm.gc.copyString("`start` is out of bound") catch null;
         ctx.vm.push(if (err) |uerr| uerr.toValue() else Value.fromBoolean(false));
 
         return -1;
     }
 
-    if (upto != null and upto.? < 0) {
-        var err: ?*ObjString = ctx.vm.gc.copyString("`len` must greater or equal to 0") catch null;
-        ctx.vm.push(if (err) |uerr| uerr.toValue() else Value.fromBoolean(false));
-
-        return -1;
-    }
-
-    const limit: usize = if (upto != null and @as(usize, @intCast(start.? + upto.?)) < self.string.len) @intCast(start.? + upto.?) else self.string.len;
-    var substr: []const u8 = self.string[@as(usize, @intCast(start.?))..limit];
+    const limit: usize = if (upto != null and @as(usize, @intCast(start + upto.?)) < self.string.len) @intCast(start + upto.?) else self.string.len;
+    const substr: []const u8 = self.string[@as(usize, @intCast(start))..limit];
 
     ctx.vm.push(
         (ctx.vm.gc.copyString(substr) catch @panic("Could not create string")).toValue(),
@@ -152,29 +134,29 @@ pub fn sub(ctx: *NativeCtx) c_int {
 }
 
 pub fn split(ctx: *NativeCtx) c_int {
-    var self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
-    var separator: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
+    const self: *ObjString = ObjString.cast(ctx.vm.peek(1).obj()).?;
+    const separator: *ObjString = ObjString.cast(ctx.vm.peek(0).obj()).?;
 
     // std.mem.split(u8, self.string, separator.string);
-    var list_def: ObjList.ListDef = ObjList.ListDef.init(
+    const list_def: ObjList.ListDef = ObjList.ListDef.init(
         ctx.vm.gc.allocator,
         ctx.vm.gc.type_registry.getTypeDef(ObjTypeDef{
             .def_type = .String,
         }) catch @panic("Could not create string"),
     );
 
-    var list_def_union: ObjTypeDef.TypeUnion = .{
+    const list_def_union: ObjTypeDef.TypeUnion = .{
         .List = list_def,
     };
 
     // TODO: reuse already allocated similar typedef
-    var list_def_type: *ObjTypeDef = ctx.vm.gc.type_registry.getTypeDef(ObjTypeDef{
+    const list_def_type: *ObjTypeDef = ctx.vm.gc.type_registry.getTypeDef(ObjTypeDef{
         .def_type = .List,
         .optional = false,
         .resolved_type = list_def_union,
     }) catch @panic("Could not create string");
 
-    var list: *ObjList = ctx.vm.gc.allocateObject(
+    const list: *ObjList = ctx.vm.gc.allocateObject(
         ObjList,
         ObjList.init(ctx.vm.gc.allocator, list_def_type),
     ) catch @panic("Could not create string");

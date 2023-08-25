@@ -145,10 +145,11 @@ pub const FunctionNode = opaque {};
 const Tag = u3;
 pub const TagBoolean: Tag = 0;
 pub const TagInteger: Tag = 1;
-pub const TagNull: Tag = 2;
-pub const TagVoid: Tag = 3;
-pub const TagObj: Tag = 4;
-pub const TagError: Tag = 5;
+pub const TagUnsignedInteger: Tag = 2;
+pub const TagNull: Tag = 3;
+pub const TagVoid: Tag = 4;
+pub const TagObj: Tag = 5;
+pub const TagError: Tag = 6;
 
 /// Most significant bit.
 pub const SignMask: u64 = 1 << 63;
@@ -165,6 +166,7 @@ pub const TrueBitMask: u64 = 1;
 pub const TrueMask: u64 = BooleanMask | TrueBitMask;
 
 pub const IntegerMask: u64 = TaggedValueMask | (@as(u64, TagInteger) << 32);
+pub const UnsignedIntegerMask: u64 = TaggedValueMask | (@as(u64, TagUnsignedInteger) << 32);
 pub const NullMask: u64 = TaggedValueMask | (@as(u64, TagNull) << 32);
 pub const VoidMask: u64 = TaggedValueMask | (@as(u64, TagVoid) << 32);
 pub const ErrorMask: u64 = TaggedValueMask | (@as(u64, TagError) << 32);
@@ -190,6 +192,10 @@ pub const Value = packed struct {
         return .{ .val = IntegerMask | @as(u32, @bitCast(val)) };
     }
 
+    pub inline fn fromUnsigned(val: u32) Value {
+        return .{ .val = UnsignedIntegerMask | val };
+    }
+
     pub inline fn fromFloat(val: f64) Value {
         return .{ .val = @as(u64, @bitCast(val)) };
     }
@@ -198,8 +204,8 @@ pub const Value = packed struct {
         return .{ .val = PointerMask | @intFromPtr(val) };
     }
 
-    pub inline fn getTag(self: Value) u3 {
-        return @intCast(@as(u32, @intCast(self.val >> 32)) & TagMask);
+    pub inline fn getTag(self: Value) Tag {
+        return @as(Tag, @intCast(@as(u32, @intCast(self.val >> 32)) & TagMask));
     }
 
     pub inline fn isBool(self: Value) bool {
@@ -210,12 +216,16 @@ pub const Value = packed struct {
         return self.val & (TaggedPrimitiveMask | SignMask) == IntegerMask;
     }
 
+    pub inline fn isUnsigned(self: Value) bool {
+        return self.val & (TaggedPrimitiveMask | SignMask) == UnsignedIntegerMask;
+    }
+
     pub inline fn isFloat(self: Value) bool {
         return self.val & TaggedValueMask != TaggedValueMask;
     }
 
     pub inline fn isNumber(self: Value) bool {
-        return self.isFloat() or self.isInteger();
+        return self.isFloat() or self.isInteger() or self.isUnsigned();
     }
 
     pub inline fn isObj(self: Value) bool {
@@ -239,15 +249,19 @@ pub const Value = packed struct {
     }
 
     pub inline fn integer(self: Value) i32 {
-        return @bitCast(@as(u32, @intCast(self.val & 0xffffffff)));
+        return @as(i32, @bitCast(@as(u32, @intCast(self.val & 0xffffffff))));
+    }
+
+    pub inline fn unsigned(self: Value) u32 {
+        return @intCast(self.val & 0xffffffff);
     }
 
     pub inline fn float(self: Value) f64 {
-        return @bitCast(self.val);
+        return @as(f64, @bitCast(self.val));
     }
 
     pub inline fn obj(self: Value) *anyopaque {
-        return @ptrFromInt(self.val & ~PointerMask);
+        return @as(*anyopaque, @ptrFromInt(self.val & ~PointerMask));
     }
 
     pub extern fn bz_valueToObject(value: Value) *ObjObject;

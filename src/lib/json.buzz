@@ -13,7 +13,7 @@ object JsonParser {
     | TODO: comform to https://datatracker.ietf.org/doc/html/rfc8259
 
     str source,
-    int offset = 0,
+    uint offset = 0u0,
 
     fun advance() > str? {
         if (this.offset >= this.source.len()) {
@@ -22,7 +22,7 @@ object JsonParser {
 
         str char = this.source[this.offset];
 
-        this.offset = this.offset + 1;
+        this.offset = this.offset + 0u1;
 
         return char;
     }
@@ -40,7 +40,7 @@ object JsonParser {
             return false;
         }
 
-        this.offset = this.offset + 1;
+        this.offset = this.offset + 0u1;
 
         return true;
     }
@@ -71,23 +71,23 @@ object JsonParser {
         }
 
         const str char = this.advance() ?? "";
-        const int byte = char.byte(0);
+        const uint byte = char.byte(0u0);
         if (char == "[") {
             return Boxed{ list = this.array() };
         } else if (char == "\{") {
             return Boxed{ map = this.map() };
-        } else if ((byte >= "0".byte(0) and byte <= "9".byte(0)) or char == "-") {
+        } else if ((byte >= "0".byte(0u0) and byte <= "9".byte(0u0)) or char == "-") {
             return this.number(char);
         } else if (char == "\"") {
             return Boxed{ string = this.string() };
-        } else if (this.source.sub(this.offset - 1, len: 4) == "true") {
-            this.offset = this.offset + 3;
+        } else if (this.source.sub(this.offset - 0u1, len: 0u4) == "true") {
+            this.offset = this.offset + 0u3;
             return Boxed{ boolean = true };
-        } else if (this.source.sub(this.offset - 1, len: 5) == "false") {
-            this.offset = this.offset + 4;
+        } else if (this.source.sub(this.offset - 0u1, len: 0u5) == "false") {
+            this.offset = this.offset + 0u4;
             return Boxed{ boolean = false };
-        } else if (this.source.sub(this.offset - 1, len: 4) == "null") {
-            this.offset = this.offset + 3;
+        } else if (this.source.sub(this.offset - 0u1, len: 0u4) == "null") {
+            this.offset = this.offset + 0u3;
             return Boxed{};
         }
 
@@ -228,26 +228,26 @@ export fun encode(Boxed data, {Boxed, void}? seen) > str {
         return "{floating}";
     } else if (data.map -> map) {
         str json = "\{";
-        const int size = map.size();
-        int count = 0;
+        const uint size = map.size();
+        uint count = 0u0;
         foreach (str key, Boxed value in map) {
             json = json + "\"{key}\":{encode(value, seen: seen)}";
 
-            if (count < size - 1) {
+            if (count < size - 0u1) {
                 json = json + ",";
             }
 
-            count = count + 1;
+            count = count + 0u1;
         }
         return json + "}";
     } else if (data.list -> list) {
         str json = "[";
 
-        const int len = list.len();
-        foreach (int i, Boxed value in list) {
+        const uint len = list.len();
+        foreach (uint i, Boxed value in list) {
             json = json + encode(value, seen: seen);
 
-            if (i < len - 1) {
+            if (i < len - 0u1) {
                 json = json + ",";
             }
         }

@@ -1,0 +1,90 @@
+import "std";
+import "debug";
+
+test "uint" {
+    uint value = 0u12;
+
+    assert(typeof value == <uint>, message: "Could create uint variable");
+
+    [int] values = [1, 2, 3];
+
+    int idx = 0;
+    uint uidx = 0u1;
+
+    assert(values[idx] == 1, message: "Could index list with int");
+    assert(values[uidx] == 2, message: "Could index list with uint");
+}
+
+test "unary uint" {
+    uint value = 0u42;
+    int v = 42;
+
+    assert(~value == 0u4294967253, message: "bitwise ~ on uint");
+    assert(~v == -43, message: "bitwise ~ on int");
+}
+
+test "binary comparison uint" {
+    uint a = 0u42;
+    uint b = 0u43;
+    int aa = 42;
+    int bb = 43;
+    int na = -42;
+    int nb = -42;
+    float fa = 42.0;
+    float fb = 43.0;
+    float nfa = -42.0;
+    float nfb = -43.0;
+
+    | assert(a == a, message: "Could == uint and uint");
+    | assert(a == aa, message: "Could == uint and int");
+    | assert(a == fa, message: "Could == uint and float");
+    | assert(a != fb, message: "Could != uint and float");
+    | assert(a != b, message: "Could != uint and uint");
+    | assert(a != na, message: "Could != uint and -int");
+    | assert(a != bb, message: "Could != uint and int");
+
+    | assert(b > a, message: "Could > uint and uint");
+    | assert(bb > a, message: "Could > int and uint");
+    | assert(a > nb, message: "could > uint and -int");
+    | assert(fb > a, message: "Could > float and uint");
+    | assert(a > nfb, message: "could > uint and -float");
+
+    | assert(a < b, message: "Could < uint and uint");
+    | assert(a < bb, message: "Could < int and uint");
+    | assert(nb < a, message: "could < uint and -int");
+    | assert(fa < b, message: "Could < float and uint");
+    | assert(nfb < a, message: "could < uint and -float");
+
+    | assert(b >= a, message: "Could >= uint and uint");
+    | assert(bb >= a, message: "Could >= int and uint");
+    | assert(a >= nb, message: "could >= uint and -int");
+    | assert(fb >= a, message: "Could >= float and uint");
+    | assert(a >= nfb, message: "could >= uint and -float");
+
+    | assert(a <= b, message: "Could <= uint and uint");
+    | assert(a <= bb, message: "Could <= int and uint");
+    | assert(nb <= a, message: "could <= uint and -int");
+    | assert(fa <= b, message: "Could <= float and uint");
+    | assert(nfb <= a, message: "could <= uint and -float");
+}
+
+test "binary arithmetic uint" {
+    uint a = 0u42;
+    uint b = 0u43;
+
+    assert(a + b == 0u85, message: "Could uint + uint");
+    assert(a + 0u4294967295 == 41, message: "Cound uint + uint overflow");
+
+    assert(b - a == 0u1, message: "Could uint - uint");
+    assert(a - b == 0u4294967295, message: "Could uint - uint overflow");
+
+    assert(a * b == 0u1806, message: "Could uint * uint");
+    assert(a * 0u4294967295 == 0u4294967254, message: "Cound uint * uint overflow");
+
+    assert(a / b == 0u0, message: "Could uint / uint");
+
+    assert(b % a == 0u1, message: "Could uint % uint");
+
+    assert(a >> 0u2 == 0u10, message: "Could uint >> uint");
+    assert(a << 0u2 == 0u168, message: "Could uint << uint");
+}

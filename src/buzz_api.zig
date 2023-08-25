@@ -1020,7 +1020,7 @@ export fn bz_mapSet(vm: *VM, map: Value, key: Value, value: Value) void {
 }
 
 export fn bz_mapGet(map: Value, key: Value) Value {
-    return ObjMap.cast(map.obj()).?.map.get(_value.floatToInteger(key)) orelse Value.Null;
+    return ObjMap.cast(map.obj()).?.map.get(key) orelse Value.Null;
 }
 
 export fn bz_valueIs(self: Value, type_def: Value) Value {
@@ -1240,9 +1240,9 @@ export fn bz_stringNext(vm: *VM, string_value: Value, index: *Value) Value {
 
     if (string.next(
         vm,
-        if (index.isNull()) null else index.integer(),
+        if (index.isNull()) null else index.unsigned(),
     ) catch @panic("Could not get next string index")) |new_index| {
-        index.* = Value.fromInteger(new_index);
+        index.* = Value.fromUnsigned(new_index);
 
         return (vm.gc.copyString(&[_]u8{string.string[@as(usize, @intCast(new_index))]}) catch @panic("Could not iterate on string")).toValue();
     }
@@ -1256,9 +1256,9 @@ export fn bz_listNext(vm: *VM, list_value: Value, index: *Value) Value {
 
     if (list.rawNext(
         vm,
-        if (index.isNull()) null else index.integer(),
+        if (index.isNull()) null else index.unsigned(),
     ) catch @panic("Could not get next list index")) |new_index| {
-        index.* = Value.fromInteger(new_index);
+        index.* = Value.fromUnsigned(new_index);
         return list.items.items[@as(usize, @intCast(new_index))];
     }
 

@@ -5,8 +5,8 @@ test "parseInt/Float" {
     assert(parseFloat("12.42") == 12.42, message: "Could parse float");
     assert(parseInt("not a number") == null, message: "Doesn't parse stupid shit");
 
-    assert(toInt(23.34) == 23, message: "Could cast float to int");
-    assert(toFloat(23) == 23.0, message: "Could cast int to float");
+    assert(floatToInt(23.34) == 23, message: "Could cast float to int");
+    assert(intToFloat(23) == 23.0, message: "Could cast int to float");
 }
 
 test "char" {

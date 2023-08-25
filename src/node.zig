@@ -33,7 +33,6 @@ const FunctionType = ObjFunction.FunctionType;
 const copyObj = _obj.copyObj;
 const Value = _value.Value;
 const valueToString = _value.valueToString;
-const floatToInteger = _value.floatToInteger;
 const Token = _token.Token;
 const TokenType = _token.TokenType;
 const CodeGen = _codegen.CodeGen;
@@ -69,6 +68,7 @@ pub const ParseNodeType = enum(u8) {
     Grouping,
     NamedVariable,
     Integer,
+    UnsignedInteger,
     Float,
     String,
     StringLiteral,
@@ -207,7 +207,7 @@ pub const ParseNode = struct {
         );
 
         if (self.docblock != null) {
-            var escaped = try escape(global_allocator, self.docblock.?.literal_string.?);
+            var escaped = try escape(global_allocator, self.docblock.?.str.?);
             defer escaped.deinit();
             try out.print(", \"docblock\": \"{s}\"", .{escaped.items});
         }
@@ -505,7 +505,7 @@ pub const NamedVariableNode = struct {
         try out.print(
             "{{\"node\": \"NamedVariable\", \"identifier\": \"{s}\", \"slot\": \"{}\", \"slot_type\": \"{}\",",
             .{
-                if (self.identifier.literal_string) |literal| literal else "unknown",
+                if (self.identifier.str) |literal| literal else "unknown",
                 self.slot,
                 self.slot_type,
             },
@@ -626,6 +626,83 @@ pub const IntegerNode = struct {
     }
 };
 
+pub const UnsignedIntegerNode = struct {
+    const Self = @This();
+
+    node: ParseNode = .{
+        .node_type = .UnsignedInteger,
+        .toJson = stringify,
+        .toByteCode = generate,
+        .toValue = val,
+        .isConstant = cnst,
+        .render = render,
+    },
+
+    integer_constant: u32,
+
+    fn cnst(_: *anyopaque) bool {
+        return true;
+    }
+
+    fn val(nodePtr: *anyopaque, _: *GarbageCollector) anyerror!Value {
+        const node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        const self = Self.cast(node).?;
+
+        return Value.fromUnsigned(self.integer_constant);
+    }
+
+    fn generate(nodePtr: *anyopaque, codegenPtr: *anyopaque, _: ?*std.ArrayList(usize)) anyerror!?*ObjFunction {
+        var codegen: *CodeGen = @ptrCast(@alignCast(codegenPtr));
+        var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+
+        if (node.synchronize(codegen)) {
+            return null;
+        }
+
+        var self = Self.cast(node).?;
+
+        try codegen.emitConstant(self.node.location, Value.fromUnsigned(self.integer_constant));
+
+        try node.patchOptJumps(codegen);
+        try node.endScope(codegen);
+
+        return null;
+    }
+
+    fn stringify(nodePtr: *anyopaque, out: *const std.ArrayList(u8).Writer) RenderError!void {
+        var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        var self = Self.cast(node).?;
+
+        try out.print("{{\"node\": \"UnsignedInteger\", \"constant\": ", .{});
+
+        try out.print("{d}, ", .{self.integer_constant});
+
+        try ParseNode.stringify(node, out);
+
+        try out.writeAll("}");
+    }
+
+    fn render(nodePtr: *anyopaque, out: *const std.ArrayList(u8).Writer, _: usize) RenderError!void {
+        const node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        const self = Self.cast(node).?;
+
+        try out.print("{d}", .{self.integer_constant});
+    }
+
+    pub fn toNode(self: *Self) *ParseNode {
+        return &self.node;
+    }
+
+    pub fn cast(nodePtr: *anyopaque) ?*Self {
+        var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
+        if (node.node_type != .UnsignedInteger) {
+            return null;
+        }
+
+        return @fieldParentPtr(Self, "node", node);
+    }
+};
+
 pub const RangeNode = struct {
     const Self = @This();
 
@@ -715,6 +792,17 @@ pub const RangeNode = struct {
                 try codegen.gc.type_registry.getTypeDef(.{
                     .def_type = .Integer,
                 }),
+                self.hi.location,
+                self.hi.type_def.?,
+                "Bad high range limit type",
+            );
+        }
+
+        if (self.hi.type_def.?.def_type != self.low.type_def.?.def_type) {
+            codegen.reporter.reportTypeCheck(
+                .range_type,
+                null,
+                self.low.type_def.?,
                 self.hi.location,
                 self.hi.type_def.?,
                 "Bad high range limit type",
@@ -2219,15 +2307,17 @@ pub const UnaryNode = struct {
             const value = try self.left.toValue(self.left, gc);
 
             return switch (self.operator) {
-                .Bnot => Value.fromInteger(~(if (value.isInteger()) value.integer() else @as(i32, @intFromFloat(value.float())))),
+                .Bnot => if (value.isInteger())
+                    Value.fromInteger(~value.integer())
+                else if (value.isUnsigned())
+                    Value.fromUnsigned(~value.unsigned())
+                else
+                    unreachable,
                 .Bang => Value.fromBoolean(!value.boolean()),
-                .Minus => number: {
-                    if (value.isInteger()) {
-                        break :number Value.fromInteger(-value.integer());
-                    } else {
-                        break :number Value.fromFloat(-value.float());
-                    }
-                },
+                .Minus => if (value.isInteger())
+                    Value.fromInteger(-value.integer())
+                else
+                    Value.fromFloat(-value.float()),
                 else => unreachable,
             };
         }
@@ -2256,11 +2346,11 @@ pub const UnaryNode = struct {
         const left_type = self.left.type_def.?;
         switch (self.operator) {
             .Bnot => {
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorFmt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected type `int`, got `{s}`",
+                        "Expected type `int` or `uint`, got `{s}`",
                         .{(try left_type.toStringAlloc(codegen.gc.allocator)).items},
                     );
                 }
@@ -2369,147 +2459,202 @@ pub const BinaryNode = struct {
         if (node.isConstant(node)) {
             const self = Self.cast(node).?;
 
-            var left = floatToInteger(try self.left.toValue(self.left, gc));
-            var right = floatToInteger(try self.right.toValue(self.right, gc));
-            var left_f: ?f64 = if (left.isFloat()) left.float() else null;
-            var right_f: ?f64 = if (right.isFloat()) right.float() else null;
-            var left_i: ?i32 = if (left.isInteger()) left.integer() else null;
-            var right_i: ?i32 = if (right.isInteger()) right.integer() else null;
+            const left_value = try self.left.toValue(self.left, gc);
+            const right_value = try self.right.toValue(self.right, gc);
+            const left_f: ?f64 = left_value.floatOrNull();
+            const right_f: ?f64 = right_value.floatOrNull();
+            const left_i: ?i32 = left_value.integerOrNull();
+            const right_i: ?i32 = right_value.integerOrNull();
+            const left_u: ?u32 = left_value.unsignedOrNull();
+            const right_u: ?u32 = right_value.unsignedOrNull();
 
             switch (self.operator) {
                 .Ampersand => {
-                    return Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) & (right_i orelse @as(i32, @intFromFloat(right_f.?))));
+                    return if (right_u != null)
+                        Value.fromUnsigned(left_u.? & right_u.?)
+                    else
+                        Value.fromInteger(left_i.? & right_i.?);
                 },
                 .Bor => {
-                    return Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) | (right_i orelse @as(i32, @intFromFloat(right_f.?))));
+                    return if (right_u != null)
+                        Value.fromUnsigned(left_u.? | right_u.?)
+                    else
+                        Value.fromInteger(left_i.? & right_i.?);
                 },
                 .Xor => {
-                    return Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) ^ (right_i orelse @as(i32, @intFromFloat(right_f.?))));
+                    return if (right_u != null)
+                        Value.fromUnsigned(left_u.? ^ right_u.?)
+                    else
+                        Value.fromInteger(left_i.? & right_i.?);
                 },
                 .ShiftLeft => {
-                    const b: i32 = right_i orelse @intFromFloat(right_f.?);
+                    if (right_i != null) {
+                        if (right_i.? < 0) {
+                            const b = right_i.? * -1;
 
-                    if (b < 0) {
-                        if (b * -1 > std.math.maxInt(u6)) {
-                            return Value.fromInteger(0);
+                            if (b > std.math.maxInt(u5)) {
+                                return Value.fromInteger(0);
+                            } else {
+                                return Value.fromInteger(
+                                    left_i.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                                );
+                            }
+                        } else {
+                            const b = right_i.?;
+
+                            if (b > std.math.maxInt(u5)) {
+                                return Value.fromInteger(0);
+                            } else {
+                                return Value.fromInteger(
+                                    left_i.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                                );
+                            }
                         }
-
-                        return Value.fromInteger(
-                            (left_i orelse @as(i32, @intFromFloat(left_f.?))) >> @as(u5, @truncate(@as(u64, @intCast(b * -1)))),
-                        );
                     } else {
-                        if (b > std.math.maxInt(u6)) {
-                            return Value.fromInteger(0);
-                        }
+                        const b = right_u.?;
 
-                        return Value.fromInteger(
-                            (left_i orelse @as(i32, @intFromFloat(left_f.?))) << @as(u5, @truncate(@as(u64, @intCast(b)))),
-                        );
+                        if (b > std.math.maxInt(u5)) {
+                            return Value.fromUnsigned(0);
+                        } else {
+                            return Value.fromUnsigned(
+                                left_u.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                            );
+                        }
                     }
                 },
                 .ShiftRight => {
-                    const b: i32 = right_i orelse @intFromFloat(right_f.?);
+                    if (right_i != null) {
+                        if (right_i.? < 0) {
+                            const b = right_i.? * -1;
 
-                    if (b < 0) {
-                        if (b * -1 > std.math.maxInt(u6)) {
-                            return Value.fromInteger(0);
+                            if (b > std.math.maxInt(u5)) {
+                                return Value.fromInteger(0);
+                            } else {
+                                return Value.fromInteger(
+                                    left_i.? << @as(u5, @truncate(@as(u64, @intCast(b)))),
+                                );
+                            }
+                        } else {
+                            const b = right_i.?;
+
+                            if (b > std.math.maxInt(u5)) {
+                                return Value.fromInteger(0);
+                            } else {
+                                return Value.fromInteger(
+                                    left_i.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                                );
+                            }
                         }
-
-                        return Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) << @as(u5, @truncate(@as(u64, @intCast(b * -1)))));
                     } else {
-                        if (b > std.math.maxInt(u6)) {
-                            return Value.fromInteger(0);
-                        }
+                        const b = right_u.?;
 
-                        return Value.fromInteger((left_i orelse @as(i32, @intFromFloat(left_f.?))) >> @as(u5, @truncate(@as(u64, @intCast(b)))));
+                        if (b > std.math.maxInt(u5)) {
+                            return Value.fromUnsigned(0);
+                        } else {
+                            return Value.fromUnsigned(
+                                left_u.? >> @as(u5, @truncate(@as(u64, @intCast(b)))),
+                            );
+                        }
                     }
                 },
                 .QuestionQuestion => {
-                    if (left.isNull()) {
-                        return right;
+                    if (left_value.isNull()) {
+                        return right_value;
                     }
 
-                    return left;
+                    return left_value;
                 },
                 .Greater => {
                     if (left_f) |lf| {
                         if (right_f) |rf| {
                             return Value.fromBoolean(lf > rf);
                         } else {
-                            return Value.fromBoolean(lf > @as(f64, @floatFromInt(right_i.?)));
+                            const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                            return Value.fromBoolean(lf > casted_right);
                         }
                     } else {
                         if (right_f) |rf| {
-                            return Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) > rf);
+                            const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                            return Value.fromBoolean(casted_left > rf);
                         } else {
-                            return Value.fromBoolean(left_i.? > right_i.?);
+                            const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                            const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                            return Value.fromBoolean(left > right);
                         }
                     }
-                    return Value.fromBoolean((left_f orelse left_i.?) > (right_f orelse right_i.?));
                 },
                 .Less => {
                     if (left_f) |lf| {
                         if (right_f) |rf| {
                             return Value.fromBoolean(lf < rf);
                         } else {
-                            return Value.fromBoolean(lf < @as(f64, @floatFromInt(right_i.?)));
+                            const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                            return Value.fromBoolean(lf < casted_right);
                         }
                     } else {
                         if (right_f) |rf| {
-                            return Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) < rf);
+                            const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                            return Value.fromBoolean(casted_left < rf);
                         } else {
-                            return Value.fromBoolean(left_i.? < right_i.?);
+                            const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                            const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                            return Value.fromBoolean(left < right);
                         }
                     }
-                    return Value.fromBoolean((left_f orelse left_i.?) < (right_f orelse right_i.?));
                 },
                 .GreaterEqual => {
                     if (left_f) |lf| {
                         if (right_f) |rf| {
                             return Value.fromBoolean(lf >= rf);
                         } else {
-                            return Value.fromBoolean(lf >= @as(f64, @floatFromInt(right_i.?)));
+                            const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                            return Value.fromBoolean(lf >= casted_right);
                         }
                     } else {
                         if (right_f) |rf| {
-                            return Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) >= rf);
+                            const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                            return Value.fromBoolean(casted_left >= rf);
                         } else {
-                            return Value.fromBoolean(left_i.? >= right_i.?);
+                            const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                            const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                            return Value.fromBoolean(left >= right);
                         }
                     }
-                    return Value.fromBoolean((left_f orelse left_i.?) >= (right_f orelse right_i.?));
                 },
                 .LessEqual => {
                     if (left_f) |lf| {
                         if (right_f) |rf| {
                             return Value.fromBoolean(lf <= rf);
                         } else {
-                            return Value.fromBoolean(lf <= @as(f64, @floatFromInt(right_i.?)));
+                            const casted_right: f64 = if (right_i) |i| @floatFromInt(i) else @floatFromInt(right_u.?);
+                            return Value.fromBoolean(lf <= casted_right);
                         }
                     } else {
                         if (right_f) |rf| {
-                            return Value.fromBoolean(@as(f64, @floatFromInt(left_i.?)) <= rf);
+                            const casted_left: f64 = if (left_i) |i| @floatFromInt(i) else @floatFromInt(left_u.?);
+                            return Value.fromBoolean(casted_left <= rf);
                         } else {
-                            return Value.fromBoolean(left_i.? <= right_i.?);
+                            const left: i64 = if (left_i) |i| @intCast(i) else @intCast(left_u.?);
+                            const right: i64 = if (right_i) |i| @intCast(i) else @intCast(right_u.?);
+                            return Value.fromBoolean(left <= right);
                         }
                     }
-                    return Value.fromBoolean((left_f orelse left_i.?) <= (right_f orelse right_i.?));
                 },
                 .BangEqual => {
-                    return Value.fromBoolean(!_value.valueEql(left, right));
+                    return Value.fromBoolean(!_value.valueEql(left_value, right_value));
                 },
                 .EqualEqual => {
-                    return Value.fromBoolean(_value.valueEql(left, right));
+                    return Value.fromBoolean(_value.valueEql(left_value, right_value));
                 },
                 .Plus => {
-                    const right_s: ?*ObjString = if (right.isObj()) ObjString.cast(right.obj()) else null;
-                    const left_s: ?*ObjString = if (left.isObj()) ObjString.cast(left.obj()) else null;
+                    const right_s: ?*ObjString = if (right_value.isObj()) ObjString.cast(right_value.obj()) else null;
+                    const left_s: ?*ObjString = if (left_value.isObj()) ObjString.cast(left_value.obj()) else null;
 
-                    const right_l: ?*ObjList = if (right.isObj()) ObjList.cast(right.obj()) else null;
-                    const left_l: ?*ObjList = if (left.isObj()) ObjList.cast(left.obj()) else null;
+                    const right_l: ?*ObjList = if (right_value.isObj()) ObjList.cast(right_value.obj()) else null;
+                    const left_l: ?*ObjList = if (left_value.isObj()) ObjList.cast(left_value.obj()) else null;
 
-                    const right_m: ?*ObjMap = if (right.isObj()) ObjMap.cast(right.obj()) else null;
-                    const left_m: ?*ObjMap = if (left.isObj()) ObjMap.cast(left.obj()) else null;
+                    const right_m: ?*ObjMap = if (right_value.isObj()) ObjMap.cast(right_value.obj()) else null;
+                    const left_m: ?*ObjMap = if (left_value.isObj()) ObjMap.cast(left_value.obj()) else null;
 
                     if (right_s != null) {
                         var new_string: std.ArrayList(u8) = std.ArrayList(u8).init(gc.allocator);
@@ -2518,9 +2663,13 @@ pub const BinaryNode = struct {
 
                         return (try gc.copyString(new_string.items)).toValue();
                     } else if (right_f != null or left_f != null) {
-                        return Value.fromFloat((right_f orelse @as(f64, @floatFromInt(right_i.?))) + (left_f orelse @as(f64, @floatFromInt(left_i.?))));
-                    } else if (right_i != null or left_i != null) {
-                        return Value.fromInteger(right_i.? + left_i.?);
+                        return Value.fromFloat(
+                            (right_f orelse @as(f64, @floatFromInt(right_i.?))) + (left_f orelse @as(f64, @floatFromInt(left_i.?))),
+                        );
+                    } else if (right_u != null) {
+                        return Value.fromUnsigned(left_u.? +% right_u.?);
+                    } else if (right_i != null) {
+                        return Value.fromInteger(left_i.? +% right_i.?);
                     } else if (right_l != null) {
                         var new_list = std.ArrayList(Value).init(gc.allocator);
                         try new_list.appendSlice(left_l.?.items.items);
@@ -2558,37 +2707,59 @@ pub const BinaryNode = struct {
                 },
                 .Minus => {
                     if (right_f != null or left_f != null) {
-                        return Value.fromFloat((right_f orelse @as(f64, @floatFromInt(right_i.?))) - (left_f orelse @as(f64, @floatFromInt(left_i.?))));
+                        return Value.fromFloat(
+                            (right_f orelse @as(f64, @floatFromInt(right_i.?))) - (left_f orelse @as(f64, @floatFromInt(left_i.?))),
+                        );
+                    } else if (right_u != null or left_u != null) {
+                        return Value.fromUnsigned(left_u.? -% right_u.?);
                     }
 
-                    return Value.fromInteger(right_i.? - left_i.?);
+                    return Value.fromInteger(left_i.? -% right_i.?);
                 },
                 .Star => {
                     if (right_f != null or left_f != null) {
                         return Value.fromFloat((right_f orelse @as(f64, @floatFromInt(right_i.?))) * (left_f orelse @as(f64, @floatFromInt(left_i.?))));
+                    } else if (right_u != null) {
+                        return Value.fromUnsigned(left_u.? *% right_u.?);
                     }
 
-                    return Value.fromInteger(right_i.? * left_i.?);
+                    return Value.fromInteger(left_i.? *% right_i.?);
                 },
                 .Slash => {
                     if (right_f != null or left_f != null) {
                         return Value.fromFloat((right_f orelse @as(f64, @floatFromInt(right_i.?))) / (left_f orelse @as(f64, @floatFromInt(left_i.?))));
+                    } else if (right_u != null) {
+                        return Value.fromUnsigned(
+                            @divFloor(left_u.?, right_u.?),
+                        );
                     }
 
-                    return Value.fromFloat(@as(f64, @floatFromInt(right_i.?)) / @as(f64, @floatFromInt(left_i.?)));
+                    return Value.fromInteger(@divFloor(left_i.?, right_i.?));
                 },
                 .Percent => {
                     if (right_f != null or left_f != null) {
-                        return Value.fromFloat(@mod((right_f orelse @as(f64, @floatFromInt(right_i.?))), (left_f orelse @as(f64, @floatFromInt(left_i.?)))));
+                        return Value.fromFloat(
+                            @mod(
+                                (right_f orelse @as(f64, @floatFromInt(right_i.?))),
+                                (left_f orelse @as(f64, @floatFromInt(left_i.?))),
+                            ),
+                        );
+                    } else if (right_u != null) {
+                        return Value.fromUnsigned(
+                            @mod(
+                                left_u.?,
+                                right_u.?,
+                            ),
+                        );
                     }
 
                     return Value.fromInteger(@mod(right_i.?, left_i.?));
                 },
                 .And => {
-                    return Value.fromBoolean(left.boolean() and right.boolean());
+                    return Value.fromBoolean(left_value.boolean() and right_value.boolean());
                 },
                 .Or => {
-                    return Value.fromBoolean(left.boolean() or right.boolean());
+                    return Value.fromBoolean(left_value.boolean() or right_value.boolean());
                 },
                 else => unreachable,
             }
@@ -2652,8 +2823,8 @@ pub const BinaryNode = struct {
             .BangEqual,
             .EqualEqual,
             => {
-                // We allow comparison between float and int so raise error if type != and one operand is not a number
-                if (!left_type.eql(right_type) and ((left_type.def_type != .Integer and left_type.def_type != .Float) or (right_type.def_type != .Integer and right_type.def_type != .Float))) {
+                // We allow comparison between float, int and uint so raise error if type != and one operand is not a number
+                if (!left_type.eql(right_type) and ((left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) or (right_type.def_type != .Integer and right_type.def_type != .UnsignedInteger and right_type.def_type != .Float))) {
                     codegen.reporter.reportTypeCheck(
                         .comparison_operand_type,
                         self.left.location,
@@ -2689,11 +2860,11 @@ pub const BinaryNode = struct {
             },
             .Ampersand => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected `int`.",
+                        "Expected `int` or `uint`.",
                     );
                 }
 
@@ -2703,11 +2874,11 @@ pub const BinaryNode = struct {
             },
             .Bor => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected `int`.",
+                        "Expected `int` or `uint`.",
                     );
                 }
 
@@ -2717,11 +2888,11 @@ pub const BinaryNode = struct {
             },
             .Xor => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected `int`.",
+                        "Expected `int` or `uint`.",
                     );
                 }
 
@@ -2731,11 +2902,11 @@ pub const BinaryNode = struct {
             },
             .ShiftLeft => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected `int`.",
+                        "Expected `int` or `uint`.",
                     );
                 }
 
@@ -2745,11 +2916,11 @@ pub const BinaryNode = struct {
             },
             .ShiftRight => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .bitwise_operand_type,
                         self.left.location,
-                        "Expected `int`.",
+                        "Expected `int` or `uint`.",
                     );
                 }
 
@@ -2759,11 +2930,11 @@ pub const BinaryNode = struct {
             },
             .Greater => {
                 // Checking only left operand since we asserted earlier that both operand have the same type
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .comparison_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2772,11 +2943,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_GREATER);
             },
             .Less => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .comparison_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2785,11 +2956,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_LESS);
             },
             .GreaterEqual => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .comparison_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2799,11 +2970,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_NOT);
             },
             .LessEqual => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .comparison_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2824,15 +2995,13 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_EQUAL);
             },
             .Plus => {
-                // zig fmt: off
-                if (left_type.def_type != .Integer
-                    and left_type.def_type != .Float
-                    and left_type.def_type != .String
-                    and left_type.def_type != .List
-                    and left_type.def_type != .Map) {
-                    codegen.reporter.reportErrorAt(.arithmetic_operand_type,self.left.location, "Expected a `int`, `float`, `str`, list or map.",);
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float and left_type.def_type != .String and left_type.def_type != .List and left_type.def_type != .Map) {
+                    codegen.reporter.reportErrorAt(
+                        .arithmetic_operand_type,
+                        self.left.location,
+                        "Expected a `int`, `uint`, `float`, `str`, list or map.",
+                    );
                 }
-                // zig fmt: on
 
                 _ = try self.left.toByteCode(self.left, codegen, breaks);
                 _ = try self.right.toByteCode(self.right, codegen, breaks);
@@ -2844,11 +3013,11 @@ pub const BinaryNode = struct {
                 });
             },
             .Minus => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .arithmetic_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2857,11 +3026,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_SUBTRACT);
             },
             .Star => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .arithmetic_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2870,11 +3039,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_MULTIPLY);
             },
             .Slash => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .arithmetic_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -2883,11 +3052,11 @@ pub const BinaryNode = struct {
                 try codegen.emitOpCode(self.node.location, .OP_DIVIDE);
             },
             .Percent => {
-                if (left_type.def_type != .Integer and left_type.def_type != .Float) {
+                if (left_type.def_type != .Integer and left_type.def_type != .UnsignedInteger and left_type.def_type != .Float) {
                     codegen.reporter.reportErrorAt(
                         .arithmetic_operand_type,
                         self.left.location,
-                        "Expected `int` or `float`.",
+                        "Expected `int`, `uint` or `float`.",
                     );
                 }
 
@@ -3032,19 +3201,20 @@ pub const SubscriptNode = struct {
             const self = Self.cast(node).?;
 
             const subscriptable = (try self.subscripted.toValue(self.subscripted, gc)).obj();
-            const index = floatToInteger(try self.index.toValue(self.index, gc));
+            const index = try self.index.toValue(self.index, gc);
 
             switch (subscriptable.obj_type) {
                 .List => {
                     const list: *ObjList = ObjList.cast(subscriptable).?;
 
                     const list_index_i: ?i32 = if (index.isInteger()) index.integer() else null;
+                    const list_index_u: ?u32 = if (index.isUnsigned()) index.unsigned() else null;
 
-                    if (list_index_i == null or list_index_i.? < 0) {
+                    if (list_index_i != null and list_index_i.? < 0) {
                         return VM.Error.OutOfBound;
                     }
 
-                    const list_index: usize = @intCast(list_index_i.?);
+                    const list_index: usize = if (list_index_i) |i| @intCast(i) else @intCast(list_index_u.?);
 
                     if (list_index < list.items.items.len) {
                         return list.items.items[list_index];
@@ -3065,12 +3235,13 @@ pub const SubscriptNode = struct {
                     const str: *ObjString = ObjString.cast(subscriptable).?;
 
                     const str_index_i: ?i32 = if (index.isInteger()) index.integer() else null;
+                    const str_index_u: ?u32 = if (index.isUnsigned()) index.unsigned() else null;
 
-                    if (str_index_i == null or str_index_i.? < 0) {
+                    if (str_index_i != null and str_index_i.? < 0) {
                         return VM.Error.OutOfBound;
                     }
 
-                    const str_index: usize = @intCast(str_index_i.?);
+                    const str_index: usize = if (str_index_i) |i| @intCast(i) else @intCast(str_index_u.?);
 
                     if (str_index < str.string.len) {
                         return (try gc.copyString(&([_]u8{str.string[str_index]}))).toValue();
@@ -3113,11 +3284,11 @@ pub const SubscriptNode = struct {
         var set_code: OpCode = .OP_SET_LIST_SUBSCRIPT;
         switch (self.subscripted.type_def.?.def_type) {
             .String => {
-                if (self.index.type_def.?.def_type != .Integer) {
+                if (self.index.type_def.?.def_type != .Integer and self.index.type_def.?.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .subscript_key_type,
                         self.index.location,
-                        "Expected `int` index.",
+                        "Expected `int` or `uint` index.",
                     );
                 }
 
@@ -3126,11 +3297,11 @@ pub const SubscriptNode = struct {
                 assert(self.value == null);
             },
             .List => {
-                if (self.index.type_def.?.def_type != .Integer) {
+                if (self.index.type_def.?.def_type != .Integer and self.index.type_def.?.def_type != .UnsignedInteger) {
                     codegen.reporter.reportErrorAt(
                         .subscript_key_type,
                         self.index.location,
-                        "Expected `int` index.",
+                        "Expected `int` or `uint` index.",
                     );
                 }
 
@@ -5080,7 +5251,7 @@ pub const EnumNode = struct {
         }
 
         switch (enum_type.def_type) {
-            .String, .Integer, .Float => {},
+            .String, .Integer, .UnsignedInteger, .Float => {},
             else => {
                 codegen.reporter.reportErrorAt(.syntax, node.location, "Type not allowed as enum value");
                 return null;
@@ -6153,11 +6324,11 @@ pub const ForEachNode = struct {
 
                 switch (self.iterable.type_def.?.def_type) {
                     .String, .List => {
-                        if (self.key.type_def.def_type != .Integer) {
+                        if (self.key.type_def.def_type != .UnsignedInteger) {
                             codegen.reporter.reportErrorAt(
                                 .foreach_key_type,
                                 self.key.node.location,
-                                "Expected `int`.",
+                                "Expected `int` or `uint`.",
                             );
                         }
                     },
@@ -6188,7 +6359,7 @@ pub const ForEachNode = struct {
                 // Key was omitted, put the correct type in the key var declation to avoid raising errors
                 switch (self.iterable.type_def.?.def_type) {
                     .Map => self.key.type_def = self.iterable.type_def.?.resolved_type.?.Map.key_type,
-                    .String, .List => self.key.type_def = try codegen.gc.type_registry.getTypeDef(.{ .def_type = .Integer }),
+                    .String, .List => self.key.type_def = try codegen.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
                     else => {},
                 }
             }
@@ -7542,7 +7713,7 @@ pub const ObjectDeclarationNode = struct {
             try out.print("\"", .{});
 
             if (self.docblocks.get(kv.key_ptr.*).?) |docblock| {
-                var escaped = try escape(global_allocator, docblock.literal_string orelse "");
+                var escaped = try escape(global_allocator, docblock.str orelse "");
                 defer escaped.deinit();
                 try out.print(", \"docblock\": \"{s}\"}}", .{escaped.items});
             } else {
@@ -8173,7 +8344,7 @@ pub const ImportNode = struct {
         var node: *ParseNode = @ptrCast(@alignCast(nodePtr));
         var self = Self.cast(node).?;
 
-        try out.print("{{\"node\": \"Import\", \"path\": \"{s}\"", .{self.path.literal_string.?});
+        try out.print("{{\"node\": \"Import\", \"path\": \"{s}\"", .{self.path.str.?});
 
         if (self.prefix) |prefix| {
             try out.print(",\"prefix\": \"{s}\"", .{prefix.lexeme});

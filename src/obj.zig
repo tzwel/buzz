@@ -486,18 +486,18 @@ pub const ObjString = struct {
         return vm.gc.copyString(new_string.items);
     }
 
-    pub fn next(self: *Self, vm: *VM, str_index: ?i32) !?i32 {
+    pub fn next(self: *Self, vm: *VM, str_index: ?u32) !?u32 {
         if (str_index) |index| {
-            if (index < 0 or index >= @as(i32, @intCast(self.string.len))) {
+            if (index >= @as(u32, @intCast(self.string.len))) {
                 try vm.throw(VM.Error.OutOfBound, (try vm.gc.copyString("Out of bound access to str")).toValue());
             }
 
-            return if (index + 1 >= @as(i32, @intCast(self.string.len)))
+            return if (index + 1 >= @as(u32, @intCast(self.string.len)))
                 null
             else
                 index + 1;
         } else {
-            return if (self.string.len > 0) @as(i32, 0) else null;
+            return if (self.string.len > 0) @as(u32, 0) else null;
         }
     }
 
@@ -552,7 +552,7 @@ pub const ObjString = struct {
         }
 
         if (mem.eql(u8, method, "len")) {
-            const native_type = try parser.parseTypeDefFrom("extern Function len() > int");
+            const native_type = try parser.parseTypeDefFrom("extern Function len() > uint");
 
             try parser.gc.objstring_memberDefs.put("len", native_type);
 
@@ -565,13 +565,13 @@ pub const ObjString = struct {
 
             return native_type;
         } else if (mem.eql(u8, method, "byte")) {
-            const native_type = try parser.parseTypeDefFrom("extern Function byte(int at) > int");
+            const native_type = try parser.parseTypeDefFrom("extern Function byte(uint at) > uint");
 
             try parser.gc.objstring_memberDefs.put("byte", native_type);
 
             return native_type;
         } else if (mem.eql(u8, method, "indexOf")) {
-            const native_type = try parser.parseTypeDefFrom("extern Function indexOf(str needle) > int?");
+            const native_type = try parser.parseTypeDefFrom("extern Function indexOf(str needle) > uint?");
 
             try parser.gc.objstring_memberDefs.put("indexOf", native_type);
 
@@ -601,13 +601,13 @@ pub const ObjString = struct {
 
             return native_type;
         } else if (mem.eql(u8, method, "sub")) {
-            const native_type = try parser.parseTypeDefFrom("extern Function sub(int start, int? len) > str");
+            const native_type = try parser.parseTypeDefFrom("extern Function sub(uint start, uint? len) > str");
 
             try parser.gc.objstring_memberDefs.put("sub", native_type);
 
             return native_type;
         } else if (mem.eql(u8, method, "repeat")) {
-            const native_type = try parser.parseTypeDefFrom("extern Function repeat(int n) > str");
+            const native_type = try parser.parseTypeDefFrom("extern Function repeat(uint n) > str");
 
             try parser.gc.objstring_memberDefs.put("repeat", native_type);
 
@@ -1417,18 +1417,18 @@ pub const ObjList = struct {
     }
 
     // Used also by the VM
-    pub fn rawNext(self: *Self, vm: *VM, list_index: ?i32) !?i32 {
+    pub fn rawNext(self: *Self, vm: *VM, list_index: ?u32) !?u32 {
         if (list_index) |index| {
-            if (index < 0 or index >= @as(i32, @intCast(self.items.items.len))) {
+            if (index >= @as(u32, @intCast(self.items.items.len))) {
                 try vm.throw(VM.Error.OutOfBound, (try vm.gc.copyString("Out of bound access to list")).toValue());
             }
 
-            return if (index + 1 >= @as(i32, @intCast(self.items.items.len)))
+            return if (index + 1 >= @as(u32, @intCast(self.items.items.len)))
                 null
             else
                 index + 1;
         } else {
-            return if (self.items.items.len > 0) @as(i32, 0) else null;
+            return if (self.items.items.len > 0) @as(u32, 0) else null;
         }
     }
 
@@ -1500,7 +1500,7 @@ pub const ObjList = struct {
 
                 var at_type = try parser.gc.type_registry.getTypeDef(
                     ObjTypeDef{
-                        .def_type = .Integer,
+                        .def_type = .UnsignedInteger,
                         .optional = false,
                     },
                 );
@@ -1546,7 +1546,7 @@ pub const ObjList = struct {
                     .defaults = std.AutoArrayHashMap(*ObjString, Value).init(parser.gc.allocator),
                     .return_type = try parser.gc.type_registry.getTypeDef(
                         ObjTypeDef{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                         },
                     ),
                     .yield_type = try parser.gc.type_registry.getTypeDef(.{ .def_type = .Void }),
@@ -1577,7 +1577,7 @@ pub const ObjList = struct {
                     try parser.gc.copyString("key"),
                     try parser.gc.type_registry.getTypeDef(
                         ObjTypeDef{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                             .optional = true,
                         },
                     ),
@@ -1592,7 +1592,7 @@ pub const ObjList = struct {
                     // When reached end of list, returns null
                     .return_type = try parser.gc.type_registry.getTypeDef(
                         ObjTypeDef{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                             .optional = true,
                         },
                     ),
@@ -1623,7 +1623,7 @@ pub const ObjList = struct {
                     try parser.gc.copyString("start"),
                     try parser.gc.type_registry.getTypeDef(
                         .{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                         },
                     ),
                 );
@@ -1633,7 +1633,7 @@ pub const ObjList = struct {
                     len_str,
                     try parser.gc.type_registry.getTypeDef(
                         .{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                             .optional = true,
                         },
                     ),
@@ -1682,7 +1682,7 @@ pub const ObjList = struct {
                     .defaults = std.AutoArrayHashMap(*ObjString, Value).init(parser.gc.allocator),
                     .return_type = try parser.gc.type_registry.getTypeDef(
                         .{
-                            .def_type = .Integer,
+                            .def_type = .UnsignedInteger,
                             .optional = true,
                         },
                     ),
@@ -1746,7 +1746,7 @@ pub const ObjList = struct {
                 try parameters.put(
                     try parser.gc.copyString("index"),
                     try parser.gc.type_registry.getTypeDef(.{
-                        .def_type = .Integer,
+                        .def_type = .UnsignedInteger,
                     }),
                 );
 
@@ -1798,8 +1798,14 @@ pub const ObjList = struct {
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                try callback_parameters.put(try parser.gc.copyString("index"), try parser.gc.type_registry.getTypeDef(.{ .def_type = .Integer }));
-                try callback_parameters.put(try parser.gc.copyString("element"), self.item_type);
+                try callback_parameters.put(
+                    try parser.gc.copyString("index"),
+                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
+                );
+                try callback_parameters.put(
+                    try parser.gc.copyString("element"),
+                    self.item_type,
+                );
 
                 var callback_method_def = ObjFunction.FunctionDef{
                     .id = ObjFunction.FunctionDef.nextId(),
@@ -1854,8 +1860,14 @@ pub const ObjList = struct {
 
                 var callback_parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator);
 
-                try callback_parameters.put(try parser.gc.copyString("index"), try parser.gc.type_registry.getTypeDef(.{ .def_type = .Integer }));
-                try callback_parameters.put(try parser.gc.copyString("element"), self.item_type);
+                try callback_parameters.put(
+                    try parser.gc.copyString("index"),
+                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
+                );
+                try callback_parameters.put(
+                    try parser.gc.copyString("element"),
+                    self.item_type,
+                );
 
                 var callback_method_def = ObjFunction.FunctionDef{
                     .id = ObjFunction.FunctionDef.nextId(),
@@ -1942,7 +1954,7 @@ pub const ObjList = struct {
 
                 try callback_parameters.put(
                     try parser.gc.copyString("index"),
-                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .Integer }),
+                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
                 );
                 try callback_parameters.put(
                     try parser.gc.copyString("element"),
@@ -2016,7 +2028,7 @@ pub const ObjList = struct {
 
                 try callback_parameters.put(
                     try parser.gc.copyString("index"),
-                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .Integer }),
+                    try parser.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
                 );
                 try callback_parameters.put(
                     try parser.gc.copyString("element"),
@@ -2306,7 +2318,7 @@ pub const ObjMap = struct {
                     .parameters = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator),
                     .defaults = std.AutoArrayHashMap(*ObjString, Value).init(parser.gc.allocator),
                     .return_type = try parser.gc.type_registry.getTypeDef(.{
-                        .def_type = .Integer,
+                        .def_type = .UnsignedInteger,
                     }),
                     .yield_type = try parser.gc.type_registry.getTypeDef(.{ .def_type = .Void }),
                     .generic_types = std.AutoArrayHashMap(*ObjString, *ObjTypeDef).init(parser.gc.allocator),
@@ -2609,6 +2621,7 @@ pub const ObjTypeDef = struct {
         Bool,
         Float,
         Integer,
+        UnsignedInteger,
         Pattern,
         String,
         Type, // Something that holds a type, not an actual type
@@ -2642,6 +2655,7 @@ pub const ObjTypeDef = struct {
         Bool: void,
         Float: void,
         Integer: void,
+        UnsignedInteger: void,
         Pattern: void,
         String: void,
         Type: void,
@@ -2728,6 +2742,7 @@ pub const ObjTypeDef = struct {
         const result = switch (self.def_type) {
             .Bool,
             .Integer,
+            .UnsignedInteger,
             .Float,
             .String,
             .Pattern,
@@ -3056,6 +3071,7 @@ pub const ObjTypeDef = struct {
             .UserData => try writer.writeAll("ud"),
             .Bool => try writer.writeAll("bool"),
             .Integer => try writer.writeAll("int"),
+            .UnsignedInteger => try writer.writeAll("uint"),
             .Float => try writer.writeAll("float"),
             .String => try writer.writeAll("str"),
             .Pattern => try writer.writeAll("pat"),
@@ -3377,6 +3393,7 @@ pub const ObjTypeDef = struct {
         return switch (expected) {
             .Bool,
             .Integer,
+            .UnsignedInteger,
             .Float,
             .String,
             .Void,

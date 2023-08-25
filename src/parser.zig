@@ -54,6 +54,7 @@ const ParseNodeType = _node.ParseNodeType;
 const ParseNode = _node.ParseNode;
 const NamedVariableNode = _node.NamedVariableNode;
 const IntegerNode = _node.IntegerNode;
+const UnsignedIntegerNode = _node.UnsignedIntegerNode;
 const FloatNode = _node.FloatNode;
 const BooleanNode = _node.BooleanNode;
 const StringLiteralNode = _node.StringLiteralNode;
@@ -163,6 +164,7 @@ pub const Local = struct {
     depth: i32,
     is_captured: bool,
     constant: bool,
+    location: Token,
 };
 
 pub const Global = struct {
@@ -344,6 +346,7 @@ pub const Parser = struct {
         .{ .prefix = null, .infix = null, .precedence = .None }, // Str
         .{ .prefix = null, .infix = null, .precedence = .None }, // Ud
         .{ .prefix = null, .infix = null, .precedence = .None }, // Int
+        .{ .prefix = null, .infix = null, .precedence = .None }, // UInt
         .{ .prefix = null, .infix = null, .precedence = .None }, // Float
         .{ .prefix = null, .infix = null, .precedence = .None }, // Type
         .{ .prefix = null, .infix = null, .precedence = .None }, // Bool
@@ -369,7 +372,8 @@ pub const Parser = struct {
         .{ .prefix = null, .infix = null, .precedence = .None }, // Default
         .{ .prefix = null, .infix = null, .precedence = .None }, // In
         .{ .prefix = null, .infix = is, .precedence = .IsAs }, // Is
-        .{ .prefix = integer, .infix = null, .precedence = .None }, // Integer
+        .{ .prefix = integer, .infix = null, .precedence = .None }, // IntegerValue
+        .{ .prefix = unsigned, .infix = null, .precedence = .None }, // UnsignedIntegerValue
         .{ .prefix = float, .infix = null, .precedence = .None }, // FloatValue
         .{ .prefix = string, .infix = null, .precedence = .None }, // String
         .{ .prefix = variable, .infix = null, .precedence = .None }, // Identifier
@@ -662,7 +666,7 @@ pub const Parser = struct {
 
             self.reportErrorAtCurrent(
                 .unknown,
-                self.parser.current_token.?.literal_string orelse "Unknown error.",
+                self.parser.current_token.?.str orelse "Unknown error.",
             );
         }
     }
@@ -689,7 +693,7 @@ pub const Parser = struct {
                     break;
                 }
 
-                self.reportErrorAtCurrent(.syntax, token.literal_string orelse "Unknown error.");
+                self.reportErrorAtCurrent(.syntax, token.str orelse "Unknown error.");
             }
         }
 
@@ -812,9 +816,17 @@ pub const Parser = struct {
             },
             .Key => {
                 if (resolved_type.def_type == .Map) {
-                    try self.resolvePlaceholder(child, resolved_type.resolved_type.?.Map.key_type, false);
+                    try self.resolvePlaceholder(
+                        child,
+                        resolved_type.resolved_type.?.Map.key_type,
+                        false,
+                    );
                 } else if (resolved_type.def_type == .List or resolved_type.def_type == .String) {
-                    try self.resolvePlaceholder(child, try self.gc.type_registry.getTypeDef(.{ .def_type = .Integer }), false);
+                    try self.resolvePlaceholder(
+                        child,
+                        try self.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger }),
+                        false,
+                    );
                 } else {
                     self.reporter.reportErrorAt(.map_key_type, child_placeholder.where, "Can't be a key");
                     return;
@@ -1178,6 +1190,13 @@ pub const Parser = struct {
                     constant,
                     true,
                 )
+            else if (try self.match(.UInt))
+                try self.varDeclaration(
+                    try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .UnsignedInteger }),
+                    .Semicolon,
+                    constant,
+                    true,
+                )
             else if (try self.match(.Float))
                 try self.varDeclaration(
                     try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .Float }),
@@ -1291,6 +1310,13 @@ pub const Parser = struct {
         } else if (try self.match(.Int)) {
             return try self.varDeclaration(
                 try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .Integer }),
+                .Semicolon,
+                constant,
+                true,
+            );
+        } else if (try self.match(.UInt)) {
+            return try self.varDeclaration(
+                try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .UnsignedInteger }),
                 .Semicolon,
                 constant,
                 true,
@@ -2386,7 +2412,7 @@ pub const Parser = struct {
             // Otherwise we try to build a wrapper around the imported function
             if (uzdef.zig_type == .Fn) {
                 // Load the lib
-                const paths = try self.searchZdefLibPaths(lib_name.literal_string.?);
+                const paths = try self.searchZdefLibPaths(lib_name.str.?);
                 defer {
                     for (paths.items) |path| {
                         self.gc.allocator.free(path);
@@ -2416,7 +2442,7 @@ pub const Parser = struct {
                             "Could not find symbol `{s}` in lib `{s}`",
                             .{
                                 symbol,
-                                lib_name.literal_string.?,
+                                lib_name.str.?,
                             },
                         );
                     }
@@ -2435,7 +2461,7 @@ pub const Parser = struct {
                         .library_not_found,
                         "External library `{s}` not found: {s}{s}\n",
                         .{
-                            lib_name.literal_string.?,
+                            lib_name.str.?,
                             if (builtin.link_libc)
                                 std.mem.sliceTo(dlerror(), 0)
                             else
@@ -2621,7 +2647,7 @@ pub const Parser = struct {
             const fun_def = function_node.type_def.?.resolved_type.?.Function;
 
             var signature_valid = true;
-            if (fun_def.parameters.count() != 1 or (fun_def.return_type.def_type != .Integer and fun_def.return_type.def_type != .Void)) {
+            if (fun_def.parameters.count() != 1 or (fun_def.return_type.def_type != .UnsignedInteger and fun_def.return_type.def_type != .Integer and fun_def.return_type.def_type != .Void)) {
                 signature_valid = false;
             } else {
                 const first_param = fun_def.parameters.get(fun_def.parameters.keys()[0]);
@@ -2776,7 +2802,7 @@ pub const Parser = struct {
 
             case_type_picked = true;
         } else {
-            enum_case_type = try self.gc.type_registry.getTypeDef(.{ .def_type = .Integer });
+            enum_case_type = try self.gc.type_registry.getTypeDef(.{ .def_type = .UnsignedInteger });
         }
 
         enum_case_type = try enum_case_type.toInstance(self.gc.allocator, &self.gc.type_registry);
@@ -2819,7 +2845,7 @@ pub const Parser = struct {
 
         var cases = std.ArrayList(*ParseNode).init(self.gc.allocator);
         var picked = std.ArrayList(bool).init(self.gc.allocator);
-        var case_index: i32 = 0;
+        var case_index: u32 = 0;
         while (!self.check(.RightBrace) and !self.check(.Eof)) : (case_index += 1) {
             if (case_index > 255) {
                 self.reportError(.enum_cases_count, "Too many enum cases.");
@@ -2837,10 +2863,21 @@ pub const Parser = struct {
                 if (enum_case_type.def_type == .Integer) {
                     var constant_node = try self.gc.allocator.create(IntegerNode);
                     constant_node.* = IntegerNode{
-                        .integer_constant = case_index,
+                        .integer_constant = @intCast(case_index),
                     };
                     constant_node.node.type_def = try self.gc.type_registry.getTypeDef(.{
                         .def_type = .Integer,
+                    });
+                    constant_node.node.location = self.parser.previous_token.?;
+
+                    try cases.append(&constant_node.node);
+                } else if (enum_case_type.def_type == .UnsignedInteger) {
+                    var constant_node = try self.gc.allocator.create(UnsignedIntegerNode);
+                    constant_node.* = UnsignedIntegerNode{
+                        .integer_constant = case_index,
+                    };
+                    constant_node.node.type_def = try self.gc.type_registry.getTypeDef(.{
+                        .def_type = .UnsignedInteger,
                     });
                     constant_node.node.location = self.parser.previous_token.?;
 
@@ -3352,7 +3389,7 @@ pub const Parser = struct {
 
         var node = try self.gc.allocator.create(PatternNode);
 
-        const source_slice = self.parser.previous_token.?.literal_string.?;
+        const source_slice = self.parser.previous_token.?.str.?;
         // Replace escaped pattern delimiter with delimiter
         const source_slice_clean = try std.mem.replaceOwned(u8, self.gc.allocator, source_slice, "\\\"", "\"");
         const source = try self.gc.allocator.dupeZ(u8, source_slice_clean);
@@ -3400,7 +3437,7 @@ pub const Parser = struct {
         var node = try self.gc.allocator.create(IntegerNode);
 
         node.* = IntegerNode{
-            .integer_constant = self.parser.previous_token.?.literal_integer.?,
+            .integer_constant = self.parser.previous_token.?.int.?,
         };
         node.node.type_def = try self.gc.type_registry.getTypeDef(.{
             .def_type = .Integer,
@@ -3411,11 +3448,25 @@ pub const Parser = struct {
         return &node.node;
     }
 
+    fn unsigned(self: *Self, _: bool) anyerror!*ParseNode {
+        const start_location = self.parser.previous_token.?;
+
+        var node = try self.gc.allocator.create(UnsignedIntegerNode);
+
+        node.* = UnsignedIntegerNode{
+            .integer_constant = self.parser.previous_token.?.uint.?,
+        };
+        node.node.type_def = try self.gc.type_registry.getTypeDef(.{
+            .def_type = .UnsignedInteger,
+        });
+        node.node.location = start_location;
+        node.node.end_location = self.parser.previous_token.?;
+
+        return &node.node;
+    }
+
     fn range(self: *Self, _: bool, low: *ParseNode) anyerror!*ParseNode {
         var node = try self.gc.allocator.create(RangeNode);
-        const int_type = try self.gc.type_registry.getTypeDef(.{
-            .def_type = .Integer,
-        });
 
         const high = try self.expression(false);
 
@@ -3425,7 +3476,7 @@ pub const Parser = struct {
             .low = low,
             .hi = high,
         };
-        const list_def = ObjList.ListDef.init(self.gc.allocator, int_type);
+        const list_def = ObjList.ListDef.init(self.gc.allocator, low.type_def orelse high.type_def.?);
         const resolved_type: ObjTypeDef.TypeUnion = ObjTypeDef.TypeUnion{
             .List = list_def,
         };
@@ -3448,7 +3499,7 @@ pub const Parser = struct {
         var node = try self.gc.allocator.create(FloatNode);
 
         node.* = FloatNode{
-            .float_constant = self.parser.previous_token.?.literal_float.?,
+            .float_constant = self.parser.previous_token.?.float.?,
         };
         node.node.type_def = try self.gc.type_registry.getTypeDef(.{
             .def_type = .Float,
@@ -3465,7 +3516,7 @@ pub const Parser = struct {
         const string_token = self.parser.previous_token.?;
         var string_parser = StringParser.init(
             self,
-            string_token.literal_string.?,
+            string_token.str.?,
             self.script_name,
             string_token.line,
             string_token.column,
@@ -4294,32 +4345,17 @@ pub const Parser = struct {
             .EqualEqual,
             => try self.gc.type_registry.getTypeDef(.{ .def_type = .Bool }),
 
-            .Plus => left.type_def orelse right.type_def,
-
+            .Plus,
             .ShiftLeft,
             .ShiftRight,
             .Ampersand,
             .Bor,
             .Xor,
-            => try self.gc.type_registry.getTypeDef(.{ .def_type = .Integer }),
-
             .Minus,
             .Star,
             .Percent,
-            => try self.gc.type_registry.getTypeDef(
-                ObjTypeDef{
-                    .def_type = if ((left.type_def != null and left.type_def.?.def_type == .Float) or (right.type_def != null and right.type_def.?.def_type == .Float))
-                        .Float
-                    else
-                        .Integer,
-                },
-            ),
-
-            .Slash => try self.gc.type_registry.getTypeDef(
-                ObjTypeDef{
-                    .def_type = .Float,
-                },
-            ),
+            .Slash,
+            => left.type_def orelse right.type_def.?,
 
             else => unreachable,
         };
@@ -4636,7 +4672,7 @@ pub const Parser = struct {
         // Parse generic & argument list
         if (function_type == .Test) {
             try self.consume(.String, "Expected a string after `test`.");
-            function_node.test_message = self.parser.previous_token.?.literal_string;
+            function_node.test_message = self.parser.previous_token.?.str;
         } else {
             try self.consume(.LeftParen, "Expected `(` after function name.");
 
@@ -4875,7 +4911,7 @@ pub const Parser = struct {
         };
 
         var test_id = std.ArrayList(u8).init(self.gc.allocator);
-        try test_id.writer().print("$test#{} {s}", .{ self.test_count, self.parser.current_token.?.literal_string.? });
+        try test_id.writer().print("$test#{} {s}", .{ self.test_count, self.parser.current_token.?.str.? });
         // TODO: this string is never freed
 
         self.test_count += 1;
@@ -5509,6 +5545,8 @@ pub const Parser = struct {
             return try self.gc.type_registry.getTypeDef(.{ .optional = false, .def_type = .Void });
         } else if (try self.match(.Int)) {
             return try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .Integer });
+        } else if (try self.match(.UInt)) {
+            return try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .UnsignedInteger });
         } else if (try self.match(.Float)) {
             return try self.gc.type_registry.getTypeDef(.{ .optional = try self.match(.Question), .def_type = .Float });
         } else if (try self.match(.Bool)) {
@@ -5663,23 +5701,32 @@ pub const Parser = struct {
     }
 
     fn declareVariable(self: *Self, variable_type: *ObjTypeDef, name_token: ?Token, constant: bool, check_name: bool) !usize {
-        var name: Token = name_token orelse self.parser.previous_token.?;
+        const name = name_token orelse self.parser.previous_token.?;
 
         if (self.current.?.scope_depth > 0) {
             // Check a local with the same name doesn't exists
-            var i: usize = self.current.?.locals.len - 1;
-            while (check_name and i >= 0) : (i -= 1) {
-                var local: *Local = &self.current.?.locals[i];
+            if (self.current.?.local_count > 0) {
+                var i = self.current.?.local_count - 1;
+                while (check_name and i >= 0) : (i -= 1) {
+                    var local: *Local = &self.current.?.locals[i];
 
-                if (local.depth != -1 and local.depth < self.current.?.scope_depth) {
-                    break;
+                    if (local.depth != -1 and local.depth < self.current.?.scope_depth) {
+                        break;
+                    }
+
+                    if (mem.eql(u8, name.lexeme, local.name.string)) {
+                        self.reporter.reportWithOrigin(
+                            .variable_already_exists,
+                            self.parser.previous_token.?,
+                            local.location,
+                            "A variable named `{s}` already exists.",
+                            .{name.lexeme},
+                            null,
+                        );
+                    }
+
+                    if (i == 0) break;
                 }
-
-                if (mem.eql(u8, name.lexeme, local.name.string)) {
-                    self.reportError(.variable_already_exists, "A variable with the same name already exists in this scope.");
-                }
-
-                if (i == 0) break;
             }
 
             return try self.addLocal(name, variable_type, constant);
@@ -5732,6 +5779,7 @@ pub const Parser = struct {
             .is_captured = false,
             .type_def = local_type,
             .constant = constant,
+            .location = name,
         };
 
         self.current.?.local_count += 1;
