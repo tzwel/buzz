@@ -1,5 +1,6 @@
 import "std";
 import "buffer";
+import "math";
 
 || Utility object to manage deserialized data from, for example, decoded JSON
 export object Boxed {
@@ -170,12 +171,12 @@ object JsonParser {
         }
 
         const str char = this.advance() ?? "";
-        const int byte = char.byte(0);
+        const int byte = char.byte();
         if (char == "[") {
             return this.array();
         } else if (char == "\{") {
             return this.map();
-        } else if ((byte >= "0".byte(0) and byte <= "9".byte(0)) or char == "-") {
+        } else if ((byte >= "0".byte() and byte <= "9".byte()) or char == "-") {
             return this.number(char);
         } else if (char == "\"") {
             return this.string();
@@ -358,3 +359,90 @@ export fun jsonEncode(Boxed data) > str !> CircularReference, NotSerializable {
 export fun jsonDecode(str json) > Boxed !> JsonParseError, WriteWhileReadingError {
     return Boxed{ data = JsonParser{ source = json }.next() };
 }
+
+export object CborParseError {
+    str? message = null,
+}
+
+object CborType {
+    int typ,
+    int mintyp,
+}
+
+object CborParser {
+    Buffer source,
+    int offset = 0,
+
+    static fun init(str source) > CborParser {
+        return CborParser{
+            source = Buffer.fromStr(soruce),
+        };
+    }
+
+    fun read() > int !> CborParseError {
+        if (this.source.read() -> byte) {
+            return byte.byte();
+        }
+
+        throw CborParseError{ message = "Unexpected EOS" };
+    }
+
+    fun readType() > CborType !> CborParseError {
+        int byte = this.read();
+
+        return CborType{
+            typ = byte >> 5,
+            mintype = byte % 32,
+        };
+    }
+
+    fun readLength(int mintyp) > ud !> CborParseError {
+        if (mintyp < 24) {
+            return mintyp;
+        } else if (mintyp < 28) {
+            int len = math.pow(2, mintyp - 24);
+            ud out = toUd(0);
+            | More than 4 bytes its u64, directly read userdata
+            if (len < 4) {
+                int iout = 0;
+                foreach (int n in 0..len) {
+                    iout = iout * 256 + this.read();
+                }
+
+                out = toUd(iout);
+            } else if (len > 4) {
+                if (this.buffer.readUserData() -> userdata) {
+                    out = userdata;
+                } else {
+                    throw CborParseError{ message = "Unexpected EOS" };
+                }
+            } else {
+                throw CborParseError{ message = "Invalid length" };
+            }
+        } else {
+            throw CborParseError{ message = "Invalid length" };
+        }
+    }
+
+    fun readString(int mintyp) > str !> CborParseError {
+        if (mintyp != 31) {
+            return this.source.read(this.readLength(mintyp);)
+        }
+        
+    }
+
+    fun readObject() > any {
+        CborType objType = this.readType();
+        int typ = objType.typ;
+        int mintyp = objType.mintyp;
+        
+        if (typ == 0) {
+            return this.readLength(mintyp);
+        } else if (typ == 1) {
+            return -1 - this.readLength(mintyp);
+        } else if (typ == 2) {
+            return this.readString(mintyp);
+        }
+    }
+}
+
