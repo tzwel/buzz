@@ -4,3 +4,7 @@
 [submodule "mir"]
 	path = mir
 	url = https://github.com/vnmakarov/mir
+[submodule "pcre2"]
+	path = pcre2
+	url = git@github.com:buzz-language/pcre2.git
+	branch = zig
