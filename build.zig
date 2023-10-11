@@ -260,12 +260,14 @@ pub fn build(b: *Build) !void {
         "/usr/local/include",
         "/usr/include",
         "mir",
+        "pcre2/zig-out/include",
     }) catch unreachable;
 
     llibs.appendSlice(&[_][]const u8{
         "/usr/local/lib",
         "/usr/lib",
         "mir",
+        "./",
     }) catch unreachable;
 
     // If macOS, add homebrew paths
