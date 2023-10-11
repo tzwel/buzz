@@ -86,7 +86,7 @@ const BuzzBuildOptions = struct {
 };
 
 fn get_buzz_prefix(b: *Build) []const u8 {
-    return std.os.getenv("BUZZ_PATH") orelse std.fs.path.dirname(b.exe_dir).?;
+    return std.process.getEnvVarOwned(b.allocator, "BUZZ_PATH") catch std.fs.path.dirname(b.exe_dir).?;
 }
 
 pub fn build(b: *Build) !void {
@@ -123,8 +123,7 @@ pub fn build(b: *Build) !void {
             "\n \t",
         ),
         // Current commit sha
-        .sha = std.os.getenv("GIT_SHA") orelse
-            std.os.getenv("GITHUB_SHA") orelse std.mem.trim(
+        .sha = std.process.getEnvVarOwned(b.allocator, "GIT_SHA") catch std.process.getEnvVarOwned(b.allocator, "GITHUB_SHA") catch std.mem.trim(
             u8,
             (std.ChildProcess.exec(.{
                 .allocator = b.allocator,

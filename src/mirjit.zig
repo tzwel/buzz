@@ -7047,7 +7047,7 @@ pub const ExternApi = enum {
             .bz_containerFromSlice => "p_bz_containerFromSlice",
             .memcpy => "p_bz_memcpy",
 
-            .setjmp => if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.windows) "p__setjmp" else "p_setjmp",
+            .setjmp => if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.tag == .windows) "p__setjmp" else "p_setjmp",
             .exit => "p_exit",
 
             .bz_dumpStack => "p_bz_dumpStack",
