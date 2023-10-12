@@ -115,8 +115,8 @@ pub fn default_buzz_prefix() []const u8 {
 }
 
 var _buzz_path_buffer: [4096]u8 = undefined;
-pub fn buzz_prefix() []const u8 {
-    if (std.os.getenv("BUZZ_PATH")) |buzz_path| return buzz_path;
+pub fn buzz_prefix(allocator: std.mem.Allocator) []const u8 {
+    if (std.process.getEnvVarOwned(allocator, "BUZZ_PATH") catch null) |buzz_path| return buzz_path;
     const path = std.fs.selfExePath(&_buzz_path_buffer) catch return default_buzz_prefix();
     const path1 = std.fs.path.dirname(path) orelse default_buzz_prefix();
     const path2 = std.fs.path.dirname(path1) orelse default_buzz_prefix();
@@ -125,8 +125,8 @@ pub fn buzz_prefix() []const u8 {
 
 var _buzz_path_buffer2: [4096]u8 = undefined;
 /// the returned string can be used only until next call to this function
-pub fn buzz_lib_path() []const u8 {
-    const path2 = buzz_prefix();
+pub fn buzz_lib_path(allocator: std.mem.Allocator) []const u8 {
+    const path2 = buzz_prefix(allocator);
     const sep = std.fs.path.sep_str;
     return std.fmt.bufPrint(&_buzz_path_buffer2, "{s}" ++ sep ++ "lib" ++ sep ++ "buzz", .{path2}) catch unreachable;
 }
@@ -5413,11 +5413,29 @@ pub const Parser = struct {
         var paths = std.ArrayList([]const u8).init(self.gc.allocator);
 
         for (search_paths) |path| {
-            const filled = try std.mem.replaceOwned(u8, self.gc.allocator, path, "?", file_name);
+            const filled = try std.mem.replaceOwned(
+                u8,
+                self.gc.allocator,
+                path,
+                "?",
+                file_name,
+            );
             defer self.gc.allocator.free(filled);
-            const suffixed = try std.mem.replaceOwned(u8, self.gc.allocator, filled, "!", "buzz");
+            const suffixed = try std.mem.replaceOwned(
+                u8,
+                self.gc.allocator,
+                filled,
+                "!",
+                "buzz",
+            );
             defer self.gc.allocator.free(suffixed);
-            const prefixed = try std.mem.replaceOwned(u8, self.gc.allocator, suffixed, "$", buzz_lib_path());
+            const prefixed = try std.mem.replaceOwned(
+                u8,
+                self.gc.allocator,
+                suffixed,
+                "$",
+                buzz_lib_path(self.gc.allocator),
+            );
 
             try paths.append(prefixed);
         }
@@ -5429,7 +5447,13 @@ pub const Parser = struct {
         var paths = std.ArrayList([]const u8).init(self.gc.allocator);
 
         for (lib_search_paths) |path| {
-            const filled = try std.mem.replaceOwned(u8, self.gc.allocator, path, "?", file_name);
+            const filled = try std.mem.replaceOwned(
+                u8,
+                self.gc.allocator,
+                path,
+                "?",
+                file_name,
+            );
             defer self.gc.allocator.free(filled);
             const suffixed = try std.mem.replaceOwned(
                 u8,
@@ -5444,7 +5468,13 @@ pub const Parser = struct {
                 },
             );
             defer self.gc.allocator.free(suffixed);
-            const prefixed = try std.mem.replaceOwned(u8, self.gc.allocator, suffixed, "$", buzz_lib_path());
+            const prefixed = try std.mem.replaceOwned(
+                u8,
+                self.gc.allocator,
+                suffixed,
+                "$",
+                buzz_lib_path(self.gc.allocator),
+            );
 
             try paths.append(prefixed);
         }

@@ -76,12 +76,8 @@ const BuzzBuildOptions = struct {
         return options;
     }
 
-    pub fn needLibC(self: @This()) bool {
-        // TODO: remove libc if possible
-        // mir can be built with musl libc
-        // mimalloc can be built with musl libc
-        // longjmp/setjmp need to be removed
-        return self.target.isLinux() or self.mimalloc;
+    pub fn needLibC(_: @This()) bool {
+        return true;
     }
 };
 
@@ -278,7 +274,7 @@ pub fn build(b: *Build) !void {
         const prefix = if (result) |r|
             std.mem.trim(u8, r.stdout, "\n")
         else
-            std.os.getenv("HOMEBREW_PREFIX") orelse "/opt/homebrew";
+            std.process.getEnvVarOwned(b.allocator, "HOMEBREW_PREFIX") catch "/opt/homebrew";
 
         var include = std.ArrayList(u8).init(b.allocator);
         include.writer().print("{s}{s}include", .{ prefix, std.fs.path.sep_str }) catch unreachable;

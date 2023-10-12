@@ -3,7 +3,7 @@ const api = @import("buzz_api.zig");
 const http = std.http;
 
 fn getProxy() ?std.http.Client.HttpProxy {
-    const proxy = std.os.getenv("HTTPS_PROXY") orelse std.os.getenv("HTTP_PROXY") orelse std.os.getenv("https_proxy") orelse std.os.getenv("http_proxy");
+    const proxy = std.process.getEnvVarOwned(api.VM.allocator, "HTTPS_PROXY") catch std.process.getEnvVarOwned(api.VM.allocator, "HTTP_PROXY") catch std.process.getEnvVarOwned(api.VM.allocator, "https_proxy") catch std.process.getEnvVarOwned(api.VM.allocator, "http_proxy") catch null;
 
     if (proxy == null) {
         return null;

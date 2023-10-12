@@ -27,7 +27,7 @@ export fn env(ctx: *api.NativeCtx) c_int {
     const key_slice = api.VM.allocator.dupeZ(u8, key.?[0..len]) catch @panic("Out of memory");
     defer api.VM.allocator.free(key_slice);
 
-    if (std.os.getenvZ(key_slice)) |value| {
+    if (std.process.getEnvVarOwned(ctx.vm.gc.allocator, key_slice) catch null) |value| {
         ctx.vm.bz_pushString(api.ObjString.bz_string(ctx.vm, if (value.len > 0) @as([*]const u8, @ptrCast(value)) else null, value.len) orelse {
             @panic("Out of memory");
         });
@@ -42,7 +42,7 @@ export fn env(ctx: *api.NativeCtx) c_int {
 
 fn sysTempDir() []const u8 {
     return switch (builtin.os.tag) {
-        .windows => unreachable, // TODO: GetTempPath
+        .windows => "/temp", // TODO: GetTempPath
         else => std.os.getenv("TMPDIR") orelse std.os.getenv("TMP") orelse std.os.getenv("TEMP") orelse std.os.getenv("TEMPDIR") orelse "/tmp",
     };
 }
