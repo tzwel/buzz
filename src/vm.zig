@@ -49,7 +49,7 @@ const OpCode = _chunk.OpCode;
 const Chunk = _chunk.Chunk;
 const disassembleChunk = _disassembler.disassembleChunk;
 const dumpStack = _disassembler.dumpStack;
-const jmp = @import("jmp.zig").jmp;
+const jmp = @import("jmp.zig");
 
 pub const ImportRegistry = std.AutoHashMap(*ObjString, std.ArrayList(Value));
 

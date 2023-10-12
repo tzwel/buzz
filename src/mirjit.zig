@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const builtin = @import("builtin");
 const BuildOptions = @import("build_options");
-const jmp = @import("jmp.zig").jmp;
+const jmp = @import("jmp.zig");
 
 const ZigType = @import("zigtypes.zig").Type;
 const r = @import("vm.zig");

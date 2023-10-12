@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const BuildOptions = @import("build_options");
-const jmp = @import("../jmp.zig").jmp;
+const jmp = @import("../jmp.zig");
 
 // FIXME: all those should operate on Value
 // FIXME: some should only be available to the JIT compiler

@@ -256,6 +256,7 @@ pub fn build(b: *Build) !void {
         "/usr/local/lib",
         "/usr/lib",
         "./vendors/mir",
+        "./vendors/mir/mir.dir/Release",
     }) catch unreachable;
 
     const lib_pcre2 = try buildPcre2(b, target, build_mode);
@@ -263,7 +264,7 @@ pub fn build(b: *Build) !void {
         try buildMimalloc(b, target, build_mode)
     else
         null;
-    const lib_mir = try buildMir(b, target, build_mode);
+    // const lib_mir = try buildMir(b, target, build_mode);
 
     // If macOS, add homebrew paths
     if (builtin.os.tag == .macos) {
@@ -340,9 +341,9 @@ pub fn build(b: *Build) !void {
 
     lib.addOptions("build_options", build_options.step(b));
 
+    lib.linkSystemLibrary("mir");
     lib.linkLibrary(lib_pcre2);
-    lib.linkLibrary(lib_mir);
-    lib.linkLibrary(lib_mir);
+    // lib.linkLibrary(lib_mir);
     if (lib_mimalloc) |mimalloc| {
         lib.linkLibrary(mimalloc);
         if (lib.target.getOsTag() == .windows) {
@@ -428,8 +429,9 @@ pub fn build(b: *Build) !void {
             std_lib.linkLibC();
         }
         std_lib.main_mod_path = .{ .path = "src" };
+        std_lib.linkSystemLibrary("mir");
         std_lib.linkLibrary(lib_pcre2);
-        std_lib.linkLibrary(lib_mir);
+        // std_lib.linkLibrary(lib_mir);
         if (lib_mimalloc) |mimalloc| {
             std_lib.linkLibrary(mimalloc);
             if (std_lib.target.getOsTag() == .windows) {
@@ -480,6 +482,7 @@ pub fn build(b: *Build) !void {
     if (build_options.needLibC()) {
         tests.linkLibC();
     }
+    tests.linkSystemLibrary("mir");
     tests.linkLibrary(lib_pcre2);
     if (lib_mimalloc) |mimalloc| {
         tests.linkLibrary(mimalloc);
