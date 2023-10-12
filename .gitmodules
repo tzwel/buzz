@@ -2,9 +2,11 @@
 	path = src/ext/clap
 	url = https://github.com/Hejsil/zig-clap.git
 [submodule "mir"]
-	path = mir
+	path = vendors/mir
 	url = https://github.com/vnmakarov/mir
-[submodule "pcre2"]
-	path = pcre2
-	url = git@github.com:buzz-language/pcre2.git
-	branch = zig
+[submodule "vendors/pcre2"]
+	path = vendors/pcre2
+	url = https://github.com/PCRE2Project/pcre2
+[submodule "vendors/mimalloc"]
+	path = vendors/mimalloc
+	url = https://github.com/microsoft/mimalloc.git

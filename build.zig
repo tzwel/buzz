@@ -246,29 +246,24 @@ pub fn build(b: *Build) !void {
     var llibs = std.ArrayList([]const u8).init(b.allocator);
     defer llibs.deinit();
 
-    sys_libs.appendSlice(
-        &[_][]const u8{
-            "mir",
-            "pcre",
-        },
-    ) catch unreachable;
-    if (build_options.mimalloc) {
-        sys_libs.append("mimalloc") catch unreachable;
-    }
-
     includes.appendSlice(&[_][]const u8{
         "/usr/local/include",
         "/usr/include",
-        "mir",
-        "pcre2/zig-out/include",
+        "./vendors/mir",
     }) catch unreachable;
 
     llibs.appendSlice(&[_][]const u8{
         "/usr/local/lib",
         "/usr/lib",
-        "mir",
-        "./",
+        "./vendors/mir",
     }) catch unreachable;
+
+    const lib_pcre2 = try buildPcre2(b, target, build_mode);
+    const lib_mimalloc = if (build_options.mimalloc)
+        try buildMimalloc(b, target, build_mode)
+    else
+        null;
+    const lib_mir = try buildMir(b, target, build_mode);
 
     // If macOS, add homebrew paths
     if (builtin.os.tag == .macos) {
@@ -315,11 +310,6 @@ pub fn build(b: *Build) !void {
     for (llibs.items) |lib| {
         exe.addLibraryPath(.{ .path = lib });
     }
-    for (sys_libs.items) |slib| {
-        // FIXME: if mir is linked as static library (libmir.a), here also need to link libc
-        // it's better to built it with Zig's build system
-        exe.linkSystemLibrary(slib);
-    }
     if (build_options.needLibC()) {
         exe.linkLibC();
     }
@@ -350,6 +340,15 @@ pub fn build(b: *Build) !void {
 
     lib.addOptions("build_options", build_options.step(b));
 
+    lib.linkLibrary(lib_pcre2);
+    lib.linkLibrary(lib_mir);
+    lib.linkLibrary(lib_mir);
+    if (lib_mimalloc) |mimalloc| {
+        lib.linkLibrary(mimalloc);
+        if (lib.target.getOsTag() == .windows) {
+            lib.linkSystemLibrary("bcrypt");
+        }
+    }
     // So that JIT compiled function can reference buzz_api
     exe.linkLibrary(lib);
 
@@ -429,6 +428,14 @@ pub fn build(b: *Build) !void {
             std_lib.linkLibC();
         }
         std_lib.main_mod_path = .{ .path = "src" };
+        std_lib.linkLibrary(lib_pcre2);
+        std_lib.linkLibrary(lib_mir);
+        if (lib_mimalloc) |mimalloc| {
+            std_lib.linkLibrary(mimalloc);
+            if (std_lib.target.getOsTag() == .windows) {
+                std_lib.linkSystemLibrary("bcrypt");
+            }
+        }
         std_lib.linkLibrary(lib);
         std_lib.addOptions("build_options", build_options.step(b));
 
@@ -473,6 +480,13 @@ pub fn build(b: *Build) !void {
     if (build_options.needLibC()) {
         tests.linkLibC();
     }
+    tests.linkLibrary(lib_pcre2);
+    if (lib_mimalloc) |mimalloc| {
+        tests.linkLibrary(mimalloc);
+        if (tests.target.getOsTag() == .windows) {
+            tests.linkSystemLibrary("bcrypt");
+        }
+    }
     tests.addOptions("build_options", build_options.step(b));
 
     const test_step = b.step("test", "Run all the tests");
@@ -481,4 +495,206 @@ pub fn build(b: *Build) !void {
     run_tests.setEnvironmentVariable("BUZZ_PATH", get_buzz_prefix(b));
     run_tests.step.dependOn(install_step); // wait for libraries to be installed
     test_step.dependOn(&run_tests.step);
+}
+
+pub fn buildPcre2(b: *Build, target: std.zig.CrossTarget, optimize: std.builtin.OptimizeMode) !*Build.Step.Compile {
+    const copyFiles = b.addWriteFiles();
+    copyFiles.addCopyFileToSource(
+        .{ .path = "vendors/pcre2/src/config.h.generic" },
+        "vendors/pcre2/src/config.h",
+    );
+    copyFiles.addCopyFileToSource(
+        .{ .path = "vendors/pcre2/src/pcre2.h.generic" },
+        "vendors/pcre2/src/pcre2.h",
+    );
+    copyFiles.addCopyFileToSource(
+        .{ .path = "vendors/pcre2/src/pcre2_chartables.c.dist" },
+        "vendors/pcre2/src/pcre2_chartables.c",
+    );
+
+    const lib = b.addStaticLibrary(.{
+        .name = "pcre2",
+        .target = target,
+        .optimize = optimize,
+    });
+    lib.addIncludePath(.{ .path = "src" });
+    lib.addCSourceFiles(
+        .{
+            .files = &.{
+                "vendors/pcre2/src/pcre2_auto_possess.c",
+                "vendors/pcre2/src/pcre2_compile.c",
+                "vendors/pcre2/src/pcre2_config.c",
+                "vendors/pcre2/src/pcre2_context.c",
+                "vendors/pcre2/src/pcre2_convert.c",
+                "vendors/pcre2/src/pcre2_dfa_match.c",
+                "vendors/pcre2/src/pcre2_error.c",
+                "vendors/pcre2/src/pcre2_extuni.c",
+                "vendors/pcre2/src/pcre2_find_bracket.c",
+                "vendors/pcre2/src/pcre2_maketables.c",
+                "vendors/pcre2/src/pcre2_match.c",
+                "vendors/pcre2/src/pcre2_match_data.c",
+                "vendors/pcre2/src/pcre2_newline.c",
+                "vendors/pcre2/src/pcre2_ord2utf.c",
+                "vendors/pcre2/src/pcre2_pattern_info.c",
+                "vendors/pcre2/src/pcre2_script_run.c",
+                "vendors/pcre2/src/pcre2_serialize.c",
+                "vendors/pcre2/src/pcre2_string_utils.c",
+                "vendors/pcre2/src/pcre2_study.c",
+                "vendors/pcre2/src/pcre2_substitute.c",
+                "vendors/pcre2/src/pcre2_substring.c",
+                "vendors/pcre2/src/pcre2_tables.c",
+                "vendors/pcre2/src/pcre2_ucd.c",
+                "vendors/pcre2/src/pcre2_valid_utf.c",
+                "vendors/pcre2/src/pcre2_xclass.c",
+                "vendors/pcre2/src/pcre2_chartables.c",
+            },
+            .flags = &.{
+                "-std=c99",
+                "-DHAVE_CONFIG_H",
+                "-DPCRE2_CODE_UNIT_WIDTH=8",
+                "-DPCRE2_STATIC",
+            },
+        },
+    );
+    lib.step.dependOn(&copyFiles.step);
+    lib.linkLibC();
+
+    return lib;
+}
+
+pub fn buildMimalloc(b: *Build, target: std.zig.CrossTarget, optimize: std.builtin.OptimizeMode) !*Build.Step.Compile {
+    const lib = b.addStaticLibrary(
+        .{
+            .name = "mimalloc",
+            .target = target,
+            .optimize = optimize,
+        },
+    );
+
+    lib.addIncludePath(.{ .path = "./vendors/mimalloc/include" });
+    lib.linkLibC();
+
+    if (lib.target.getOsTag() == .macos) {
+        var macOS_sdk_path = std.ArrayList(u8).init(b.allocator);
+        try macOS_sdk_path.writer().print(
+            "{s}/usr/include",
+            .{
+                (std.ChildProcess.exec(.{
+                    .allocator = b.allocator,
+                    .argv = &.{
+                        "xcrun",
+                        "--show-sdk-path",
+                    },
+                    .cwd = b.pathFromRoot("."),
+                    .expand_arg0 = .expand,
+                }) catch {
+                    std.debug.print("Warning: failed to get MacOSX sdk path", .{});
+                    unreachable;
+                }).stdout,
+            },
+        );
+
+        lib.addSystemIncludePath(.{ .path = macOS_sdk_path.items });
+        // Github macos-12 runner (https://github.com/actions/runner-images/blob/main/images/macos/macos-12-Readme.md).
+        lib.addSystemIncludePath(.{ .path = "/Applications/Xcode_14.0.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX14.0.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX13.3.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX12.3.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX12.1.sdk/usr/include" });
+    }
+
+    lib.addCSourceFiles(
+        .{
+            .files = &.{
+                "./vendors/mimalloc/src/alloc-aligned.c",
+                "./vendors/mimalloc/src/alloc.c",
+                "./vendors/mimalloc/src/arena.c",
+                "./vendors/mimalloc/src/bitmap.c",
+                "./vendors/mimalloc/src/heap.c",
+                "./vendors/mimalloc/src/init.c",
+                "./vendors/mimalloc/src/options.c",
+                "./vendors/mimalloc/src/os.c",
+                "./vendors/mimalloc/src/page.c",
+                "./vendors/mimalloc/src/random.c",
+                "./vendors/mimalloc/src/segment-map.c",
+                "./vendors/mimalloc/src/segment.c",
+                "./vendors/mimalloc/src/stats.c",
+            },
+            .flags = if (lib.optimize != .Debug)
+                &.{
+                    "-DNDEBUG=1",
+                    "-DMI_SECURE=0",
+                    "-DMI_STAT=0",
+                }
+            else
+                &.{},
+        },
+    );
+
+    return lib;
+}
+
+pub fn buildMir(b: *Build, target: std.zig.CrossTarget, optimize: std.builtin.OptimizeMode) !*Build.Step.Compile {
+    const lib = b.addStaticLibrary(
+        .{
+            .name = "mir",
+            .target = target,
+            .optimize = optimize,
+        },
+    );
+
+    lib.addIncludePath(.{ .path = "./vendors/mir" });
+    lib.linkLibC();
+
+    var macOS_sdk_path: ?std.ArrayList(u8) = null;
+    if (lib.target.getOsTag() == .macos) {
+        macOS_sdk_path = std.ArrayList(u8).init(b.allocator);
+        try macOS_sdk_path.?.writer().print(
+            "{s}/usr/include",
+            .{
+                (std.ChildProcess.exec(.{
+                    .allocator = b.allocator,
+                    .argv = &.{
+                        "xcrun",
+                        "--show-sdk-path",
+                    },
+                    .cwd = b.pathFromRoot("."),
+                    .expand_arg0 = .expand,
+                }) catch {
+                    std.debug.print("Warning: failed to get MacOSX sdk path", .{});
+                    unreachable;
+                }).stdout,
+            },
+        );
+
+        lib.addSystemIncludePath(.{ .path = macOS_sdk_path.?.items });
+        // Github macos-12 runner (https://github.com/actions/runner-images/blob/main/images/macos/macos-12-Readme.md).
+        lib.addSystemIncludePath(.{ .path = "/Applications/Xcode_14.0.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX14.0.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX13.3.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX12.3.sdk/usr/include" });
+        lib.addSystemIncludePath(.{ .path = "/Library/Developer/CommandLineTools/SDKs/MacOSX12.1.sdk/usr/include" });
+    }
+
+    lib.addCSourceFiles(
+        .{
+            .files = &.{
+                "./vendors/mir/mir.c",
+                "./vendors/mir/mir-gen.c",
+                "./vendors/mir/c2mir/c2mir.c",
+            },
+            .flags = &.{
+                "-fsigned-char",
+                "-O3",
+                "-DNDEBUG=1",
+                "-DMIR_PARALLEL_GEN=1",
+                // "-DADDITIONAL_INCLUDE_PATH=\"/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include\"",
+            },
+        },
+    );
+
+    // lib.linkSystemLibrary("m");
+    // lib.linkSystemLibrary("dl");
+
+    return lib;
 }
