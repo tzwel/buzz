@@ -19,6 +19,10 @@ const StringParser = @import("string_parser.zig").StringParser;
 const GarbageCollector = @import("memory.zig").GarbageCollector;
 const Reporter = @import("reporter.zig");
 const FFI = @import("ffi.zig");
+const dlerror = if (builtin.os.tag != .windows)
+    @import("dlerror.zig").dlerror
+else
+    null;
 
 const Value = _value.Value;
 const ValueType = _value.ValueType;
@@ -106,8 +110,6 @@ const GenericResolveNode = _node.GenericResolveNode;
 const ParsedArg = _node.ParsedArg;
 const OpCode = _chunk.OpCode;
 const TypeRegistry = _obj.TypeRegistry;
-
-extern fn dlerror() [*:0]u8;
 
 pub fn default_buzz_prefix() []const u8 {
     // todo: maybe it's better to have multiple search paths?
@@ -2849,8 +2851,8 @@ pub const Parser = struct {
                         "External library `{s}` not found: {s}{s}\n",
                         .{
                             lib_name.literal_string.?,
-                            if (builtin.link_libc)
-                                std.mem.sliceTo(dlerror(), 0)
+                            if (builtin.os.tag != .windows)
+                                std.mem.sliceTo(dlerror.?(), 0)
                             else
                                 "",
                             search_report.items,
@@ -5797,8 +5799,8 @@ pub const Parser = struct {
             "External library `{s}` not found: {s}{s}\n",
             .{
                 file_basename,
-                if (builtin.link_libc)
-                    std.mem.sliceTo(dlerror(), 0)
+                if (builtin.os.tag != .windows)
+                    std.mem.sliceTo(dlerror.?(), 0)
                 else
                     "",
                 search_report.items,
