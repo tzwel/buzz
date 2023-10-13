@@ -88,7 +88,7 @@ fn get_buzz_prefix(b: *Build) []const u8 {
 pub fn build(b: *Build) !void {
     // Check minimum zig version
     const current_zig = builtin.zig_version;
-    const min_zig = std.SemanticVersion.parse("0.12.0-dev.878+7abf9b3a8") catch return;
+    const min_zig = std.SemanticVersion.parse("0.12.0-dev.888+130227491") catch return;
     if (current_zig.order(min_zig).compare(.lt)) {
         @panic(b.fmt("Your Zig version v{} does not meet the minimum build requirement of v{}", .{ current_zig, min_zig }));
     }
@@ -242,10 +242,17 @@ pub fn build(b: *Build) !void {
     var llibs = std.ArrayList([]const u8).init(b.allocator);
     defer llibs.deinit();
 
+    sys_libs.appendSlice(
+        &[_][]const u8{
+            "mir",
+        },
+    ) catch unreachable;
+
     includes.appendSlice(&[_][]const u8{
         "/usr/local/include",
         "/usr/include",
         "./vendors/mir",
+        "./vendors/mimalloc/include",
     }) catch unreachable;
 
     llibs.appendSlice(&[_][]const u8{
@@ -337,9 +344,7 @@ pub fn build(b: *Build) !void {
 
     lib.addOptions("build_options", build_options.step(b));
 
-    lib.linkSystemLibrary("mir");
     lib.linkLibrary(lib_pcre2);
-    // lib.linkLibrary(lib_mir);
     if (lib_mimalloc) |mimalloc| {
         lib.linkLibrary(mimalloc);
         if (lib.target.getOsTag() == .windows) {
@@ -425,9 +430,7 @@ pub fn build(b: *Build) !void {
             std_lib.linkLibC();
         }
         std_lib.main_mod_path = .{ .path = "src" };
-        std_lib.linkSystemLibrary("mir");
         std_lib.linkLibrary(lib_pcre2);
-        // std_lib.linkLibrary(lib_mir);
         if (lib_mimalloc) |mimalloc| {
             std_lib.linkLibrary(mimalloc);
             if (std_lib.target.getOsTag() == .windows) {
@@ -478,7 +481,6 @@ pub fn build(b: *Build) !void {
     if (build_options.needLibC()) {
         tests.linkLibC();
     }
-    tests.linkSystemLibrary("mir");
     tests.linkLibrary(lib_pcre2);
     if (lib_mimalloc) |mimalloc| {
         tests.linkLibrary(mimalloc);
@@ -490,7 +492,7 @@ pub fn build(b: *Build) !void {
 
     const test_step = b.step("test", "Run all the tests");
     const run_tests = b.addRunArtifact(tests);
-    run_tests.cwd = ".";
+    run_tests.cwd = Build.LazyPath{ .path = "." };
     run_tests.setEnvironmentVariable("BUZZ_PATH", get_buzz_prefix(b));
     run_tests.step.dependOn(install_step); // wait for libraries to be installed
     test_step.dependOn(&run_tests.step);
@@ -618,6 +620,7 @@ pub fn buildMimalloc(b: *Build, target: std.zig.CrossTarget, optimize: std.built
                 "./vendors/mimalloc/src/segment-map.c",
                 "./vendors/mimalloc/src/segment.c",
                 "./vendors/mimalloc/src/stats.c",
+                "./vendors/mimalloc/src/prim/prim.c",
             },
             .flags = if (lib.optimize != .Debug)
                 &.{
