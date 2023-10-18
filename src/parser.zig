@@ -1959,13 +1959,13 @@ pub const Parser = struct {
             true, // Object is always constant
             true,
         );
+        _ = slot;
 
         assert(!object_type.optional);
 
         self.markInitialized();
 
         node.* = ObjectDeclarationNode{
-            .slot = slot,
             .methods = methods,
             .properties = properties,
             .docblocks = docblocks,
@@ -2078,7 +2078,7 @@ pub const Parser = struct {
         var node = try self.gc.allocator.create(ProtocolDeclarationNode);
         node.node.ends_scope = try self.endScope();
 
-        const slot = try self.declareVariable(
+        _ = try self.declareVariable(
             &protocol_type, // Should resolve protocol_placeholder and be discarded
             protocol_name,
             true, // Protocol is always constant
@@ -2089,9 +2089,7 @@ pub const Parser = struct {
 
         self.markInitialized();
 
-        node.* = ProtocolDeclarationNode{
-            .slot = slot,
-        };
+        node.* = ProtocolDeclarationNode{};
         node.node.type_def = protocol_placeholder;
         node.node.location = start_location;
         node.node.end_location = self.parser.previous_token.?;
@@ -2862,7 +2860,6 @@ pub const Parser = struct {
             try elements.append(
                 .{
                     .fn_ptr = fn_ptr,
-                    .slot = slot,
                     .zdef = zdef,
                 },
             );
@@ -3236,7 +3233,7 @@ pub const Parser = struct {
             },
         );
 
-        const slot: usize = try self.declareVariable(
+        _ = try self.declareVariable(
             enum_type,
             enum_name,
             true,
@@ -3304,7 +3301,6 @@ pub const Parser = struct {
 
         var node = try self.gc.allocator.create(EnumNode);
         node.* = EnumNode{
-            .slot = slot,
             .cases = cases,
             .picked = picked,
             .case_type_picked = case_type_picked,

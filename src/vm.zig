@@ -341,7 +341,7 @@ pub const VM = struct {
     gc: *GarbageCollector,
     current_fiber: *Fiber,
     main_fiber: *Fiber,
-    globals: std.ArrayList(Value),
+    globals: std.AutoHashMap(*ObjString, Value),
     import_registry: *ImportRegistry,
     mir_jit: ?MIRJIT = null,
     flavor: RunFlavor,
@@ -354,7 +354,7 @@ pub const VM = struct {
         var self: Self = .{
             .gc = gc,
             .import_registry = import_registry,
-            .globals = std.ArrayList(Value).init(gc.allocator),
+            .globals = std.AutoHashMap(*ObjString, Value).init(gc.allocator),
             .current_fiber = main_fiber,
             .main_fiber = main_fiber,
             .flavor = flavor,
@@ -478,10 +478,6 @@ pub const VM = struct {
         return &self.current_fiber.frames.items[self.current_fiber.frame_count - 1];
     }
 
-    pub inline fn currentGlobals(self: *Self) *std.ArrayList(Value) {
-        return self.currentFrame().?.closure.globals;
-    }
-
     pub fn interpret(self: *Self, function: *ObjFunction, args: ?[][:0]u8) MIRJIT.Error!void {
         const fiber_def = ObjFiber.FiberDef{
             .return_type = try self.gc.type_registry.getTypeDef(.{ .def_type = .Void }),
@@ -511,7 +507,7 @@ pub const VM = struct {
 
         self.push((try self.gc.allocateObject(
             ObjClosure,
-            try ObjClosure.init(self.gc.allocator, self, function),
+            try ObjClosure.init(self.gc.allocator, function),
         )).toValue());
 
         self.push((try self.cliArgs(args)).toValue());
@@ -888,13 +884,10 @@ pub const VM = struct {
     }
 
     fn OP_DEFINE_GLOBAL(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
-        self.globals.ensureTotalCapacity(arg + 1) catch |e| {
-            panic(e);
-            unreachable;
-        };
-        self.globals.expandToCapacity();
-        self.globals.items[arg] = self.peek(0);
-        _ = self.pop();
+        self.globals.put(
+            self.readConstant(arg).obj().access(ObjString, .String, self.gc).?,
+            self.pop(),
+        ) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -911,7 +904,11 @@ pub const VM = struct {
     }
 
     fn OP_GET_GLOBAL(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
-        self.push(self.currentGlobals().items[arg]);
+        self.push(
+            self.globals.get(
+                self.readConstant(arg).obj().access(ObjString, .String, self.gc).?,
+            ).?,
+        );
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -928,7 +925,10 @@ pub const VM = struct {
     }
 
     fn OP_SET_GLOBAL(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
-        self.currentGlobals().items[arg] = self.peek(0);
+        self.globals.put(
+            self.readConstant(arg).obj().access(ObjString, .String, self.gc).?,
+            self.peek(0),
+        ) catch @panic("Out of memory");
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(
@@ -2246,19 +2246,22 @@ pub const VM = struct {
     }
 
     fn OP_OBJECT(self: *Self, _: *CallFrame, _: u32, _: OpCode, arg: u24) void {
-        var object: *ObjObject = self.gc.allocateObject(
+        const name = self.readConstant(arg).obj().access(ObjString, .String, self.gc).?;
+        const object: *ObjObject = self.gc.allocateObject(
             ObjObject,
             ObjObject.init(
                 self.gc.allocator,
-                self.readConstant(arg).obj().access(ObjString, .String, self.gc).?,
-                self.readConstant(@as(u24, @intCast(self.readInstruction()))).obj().access(ObjTypeDef, .Type, self.gc).?,
+                name,
+                self.readConstant(@intCast(self.readInstruction())).obj().access(ObjTypeDef, .Type, self.gc).?,
             ),
-        ) catch |e| {
-            panic(e);
-            unreachable;
-        };
+        ) catch @panic("Out of memory");
 
-        self.push(Value.fromObj(object.toObj()));
+        self.globals.put(
+            name,
+            object.toValue(),
+        ) catch @panic("Out of memory");
+
+        self.push(object.toValue());
 
         const next_full_instruction: u32 = self.readInstruction();
         @call(

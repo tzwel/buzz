@@ -865,13 +865,9 @@ pub const ObjClosure = struct {
     function: *ObjFunction,
 
     upvalues: std.ArrayList(*ObjUpValue),
-    // Pointer to the global with which the function was declared
-    globals: *std.ArrayList(Value),
 
-    pub fn init(allocator: Allocator, vm: *VM, function: *ObjFunction) !Self {
+    pub fn init(allocator: Allocator, function: *ObjFunction) !Self {
         return Self{
-            // TODO: copy?
-            .globals = &vm.globals,
             .function = function,
             .upvalues = try std.ArrayList(*ObjUpValue).initCapacity(allocator, function.upvalue_count),
         };
@@ -881,9 +877,6 @@ pub const ObjClosure = struct {
         try gc.markObj(self.function.toObj());
         for (self.upvalues.items) |upvalue| {
             try gc.markObj(upvalue.toObj());
-        }
-        for (self.globals.items) |global| {
-            try gc.markValue(global);
         }
     }
 

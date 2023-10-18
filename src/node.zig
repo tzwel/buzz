@@ -665,9 +665,29 @@ pub const NamedVariableNode = struct {
 
             _ = try value.toByteCode(value, codegen, breaks);
 
-            try codegen.emitCodeArg(self.node.location, set_op, @intCast(self.slot));
+            if (self.slot_type == .Global) {
+                try codegen.emitCodeArg(
+                    self.node.location,
+                    set_op,
+                    try codegen.makeConstant(
+                        (try codegen.gc.copyString(self.identifier.lexeme)).toValue(),
+                    ),
+                );
+            } else {
+                try codegen.emitCodeArg(self.node.location, set_op, @intCast(self.slot));
+            }
         } else {
-            try codegen.emitCodeArg(self.node.location, get_op, @intCast(self.slot));
+            if (self.slot_type == .Global) {
+                try codegen.emitCodeArg(
+                    self.node.location,
+                    get_op,
+                    try codegen.makeConstant(
+                        (try codegen.gc.copyString(self.identifier.lexeme)).toValue(),
+                    ),
+                );
+            } else {
+                try codegen.emitCodeArg(self.node.location, get_op, @intCast(self.slot));
+            }
         }
 
         try node.patchOptJumps(codegen);
@@ -5023,7 +5043,13 @@ pub const FunDeclarationNode = struct {
         _ = try self.function.node.toByteCode(&self.function.node, codegen, breaks);
 
         if (self.slot_type == .Global) {
-            try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(self.slot));
+            try codegen.emitCodeArg(
+                self.node.location,
+                .OP_DEFINE_GLOBAL,
+                try codegen.makeConstant(
+                    self.function.node.type_def.?.resolved_type.?.Function.name.toValue(),
+                ),
+            );
         }
 
         try node.patchOptJumps(codegen);
@@ -5133,7 +5159,13 @@ pub const VarDeclarationNode = struct {
         }
 
         if (self.slot_type == .Global) {
-            try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(self.slot));
+            try codegen.emitCodeArg(
+                self.node.location,
+                .OP_DEFINE_GLOBAL,
+                try codegen.makeConstant(
+                    (try codegen.gc.copyString(self.name.lexeme)).toValue(),
+                ),
+            );
         }
 
         try node.patchOptJumps(codegen);
@@ -5231,7 +5263,6 @@ pub const EnumNode = struct {
         .render = render,
     },
 
-    slot: usize,
     cases: std.ArrayList(*ParseNode),
     picked: std.ArrayList(bool),
     case_type_picked: bool,
@@ -5311,7 +5342,11 @@ pub const EnumNode = struct {
                 try val(self.toNode(), codegen.gc),
             ),
         );
-        try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(self.slot));
+        try codegen.emitCodeArg(
+            self.node.location,
+            .OP_DEFINE_GLOBAL,
+            try codegen.makeConstant(self.node.type_def.?.resolved_type.?.Enum.name.toValue()),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -7408,7 +7443,6 @@ pub const ObjectDeclarationNode = struct {
         .render = render,
     },
 
-    slot: usize,
     // All properties and methods with preserved order for buzz --fmt
     fields: [][]const u8,
     methods: std.StringHashMap(*ParseNode),
@@ -7485,10 +7519,6 @@ pub const ObjectDeclarationNode = struct {
         // Put  object on the stack and define global with it
         try codegen.emitCodeArg(self.node.location, .OP_OBJECT, name_constant);
         try codegen.emit(self.node.location, @intCast(object_type_constant));
-        try codegen.emitCodeArg(self.node.location, .OP_DEFINE_GLOBAL, @intCast(self.slot));
-
-        // Put the object on the stack to set its fields
-        try codegen.emitCodeArg(self.node.location, .OP_GET_GLOBAL, @intCast(self.slot));
 
         // Methods
         var it = self.methods.iterator();
@@ -7759,8 +7789,6 @@ pub const ProtocolDeclarationNode = struct {
         .render = render,
     },
 
-    slot: usize,
-
     fn constant(_: *anyopaque) bool {
         return false;
     }
@@ -7780,7 +7808,11 @@ pub const ProtocolDeclarationNode = struct {
         const self = Self.cast(node).?;
 
         try codegen.emitConstant(node.location, node.type_def.?.toValue());
-        try codegen.emitCodeArg(node.location, .OP_DEFINE_GLOBAL, @intCast(self.slot));
+        try codegen.emitCodeArg(
+            node.location,
+            .OP_DEFINE_GLOBAL,
+            try codegen.makeConstant(self.node.type_def.?.resolved_type.?.Protocol.name.toValue()),
+        );
 
         try node.patchOptJumps(codegen);
         try node.endScope(codegen);
@@ -8120,7 +8152,6 @@ pub const ZdefNode = struct {
         obj_native: ?*ObjNative = null,
         // TODO: On the stack, do we free it at some point?
         zdef: *const FFI.Zdef,
-        slot: usize,
     };
 
     node: ParseNode = .{
@@ -8179,7 +8210,13 @@ pub const ZdefNode = struct {
                 },
                 else => unreachable,
             }
-            try codegen.emitCodeArg(node.location, .OP_DEFINE_GLOBAL, @intCast(element.slot));
+            try codegen.emitCodeArg(
+                node.location,
+                .OP_DEFINE_GLOBAL,
+                try codegen.makeConstant(
+                    (try codegen.gc.copyString(element.zdef.name)).toValue(),
+                ),
+            );
         }
 
         try node.patchOptJumps(codegen);

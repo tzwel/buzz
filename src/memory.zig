@@ -772,11 +772,13 @@ pub const GarbageCollector = struct {
         }
 
         // Mark import registry
-        var it = vm.import_registry.iterator();
-        while (it.next()) |kv| {
-            try self.markObj(kv.key_ptr.*.toObj());
-            for (kv.value_ptr.*.items) |global| {
-                try self.markValue(global);
+        {
+            var it = vm.import_registry.iterator();
+            while (it.next()) |kv| {
+                try self.markObj(kv.key_ptr.*.toObj());
+                for (kv.value_ptr.*.items) |global| {
+                    try self.markValue(global);
+                }
             }
         }
 
@@ -787,8 +789,12 @@ pub const GarbageCollector = struct {
         if (BuildOptions.gc_debug) {
             std.debug.print("MARKING GLOBALS OF VM @{}\n", .{@intFromPtr(vm)});
         }
-        for (vm.globals.items) |global| {
-            try self.markValue(global);
+        {
+            var it = vm.globals.iterator();
+            while (it.next()) |kv| {
+                try self.markObj(kv.key_ptr.*.toObj());
+                try self.markValue(kv.value_ptr.*);
+            }
         }
         if (BuildOptions.gc_debug) {
             std.debug.print("DONE MARKING GLOBALS OF VM @{}\n", .{@intFromPtr(vm)});
