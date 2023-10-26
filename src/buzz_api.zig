@@ -356,7 +356,6 @@ export fn bz_valueToObjUserData(value: Value) *ObjUserData {
     return ObjUserData.cast(value.obj()).?;
 }
 
-// FIXME: move this is ObjForeignContainer?
 export fn bz_valueToForeignContainerPtr(value: Value) [*]u8 {
     return ObjForeignContainer.cast(value.obj()).?.data.ptr;
 }
@@ -1664,6 +1663,20 @@ export fn bz_containerFromSlice(vm: *VM, type_def: *ObjTypeDef, ptr: [*]u8, len:
             .data = ptr[0..len],
         },
     ) catch @panic("Out of memory"));
+
+    return container.toValue();
+}
+
+export fn bz_containerFromSliceCopy(vm: *VM, type_def: *ObjTypeDef, ptr: [*]u8, len: usize) Value {
+    var container = (vm.gc.allocateObject(
+        ObjForeignContainer,
+        .{
+            .type_def = type_def,
+            .data = vm.gc.allocateMany(u8, len) catch @panic("Out of memory"),
+        },
+    ) catch @panic("Out of memory"));
+
+    @memcpy(container.data, ptr[0..len]);
 
     return container.toValue();
 }

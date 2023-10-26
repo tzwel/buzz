@@ -12,6 +12,7 @@ const n = @import("node.zig");
 const o = @import("obj.zig");
 const v = @import("value.zig");
 const api = @import("lib/buzz_api.zig");
+const Reporter = @import("reporter.zig");
 
 pub const Error = error{CantCompile} || VM.Error;
 
@@ -88,6 +89,8 @@ call_count: u128 = 0,
 // Keeps track of time spent in the JIT
 jit_time: usize = 0,
 
+reporter: Reporter,
+
 pub fn init(vm: *VM) Self {
     return .{
         .vm = vm,
@@ -98,6 +101,7 @@ pub fn init(vm: *VM) Self {
         .objclosures_queue = std.AutoHashMap(*o.ObjClosure, void).init(vm.gc.allocator),
         .required_ext_api = std.AutoHashMap(ExternApi, void).init(vm.gc.allocator),
         .modules = std.ArrayList(m.MIR_module_t).init(vm.gc.allocator),
+        .reporter = Reporter{ .allocator = vm.gc.allocator },
     };
 }
 
@@ -528,7 +532,7 @@ fn buildZdefUnionGetter(
 
             const field_ptr = m.MIR_new_mem_op(
                 self.ctx,
-                zigToMIRType(zig_type.*),
+                self.zigToMIRType(zig_type.*),
                 0,
                 data_reg,
                 index,
@@ -636,7 +640,7 @@ fn buildZdefUnionSetter(
 
             const field_ptr = m.MIR_new_mem_op(
                 self.ctx,
-                zigToMIRType(zig_type.*),
+                self.zigToMIRType(zig_type.*),
                 0,
                 data_reg,
                 index,
@@ -716,7 +720,7 @@ fn buildZdefContainerGetter(
 
     const field_ptr = m.MIR_new_mem_op(
         self.ctx,
-        zigToMIRType(zig_type.*),
+        self.zigToMIRType(zig_type.*),
         @intCast(offset),
         data_reg,
         index,
@@ -812,7 +816,7 @@ fn buildZdefContainerSetter(
 
     const field_ptr = m.MIR_new_mem_op(
         self.ctx,
-        zigToMIRType(zig_type.*),
+        self.zigToMIRType(zig_type.*),
         @intCast(offset),
         data_reg,
         index,
@@ -833,7 +837,13 @@ fn buildZdefContainerSetter(
     return function;
 }
 
-fn buildBuzzValueToZigValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: ZigType, buzz_value: m.MIR_op_t, dest: m.MIR_op_t) !void {
+fn buildBuzzValueToZigValue(
+    self: *Self,
+    buzz_type: *o.ObjTypeDef,
+    zig_type: ZigType,
+    buzz_value: m.MIR_op_t,
+    dest: m.MIR_op_t,
+) !void {
     switch (zig_type) {
         .Int => {
             if (buzz_type.def_type == .Float) {
@@ -843,7 +853,7 @@ fn buildBuzzValueToZigValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: Zig
                 );
 
                 // This is a int represented by a buzz float value
-                self.buildValueToFloat(buzz_value, tmp_float);
+                self.buildValueToDouble(buzz_value, tmp_float);
 
                 // Convert it back to an int
                 self.D2I(dest, tmp_float);
@@ -852,7 +862,14 @@ fn buildBuzzValueToZigValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: Zig
             }
         },
         // TODO: float can't be truncated like ints, we need a D2F instruction
-        .Float => self.buildValueToFloat(buzz_value, dest),
+        .Float => {
+            if (zig_type.Float.bits == 64) {
+                self.buildValueToDouble(buzz_value, dest);
+            } else {
+                assert(zig_type.Float.bits == 32);
+                self.buildValueToFloat(buzz_value, dest);
+            }
+        },
         .Bool => self.buildValueToBoolean(buzz_value, dest),
         .Pointer => {
             // Is it a [*:0]const u8
@@ -882,6 +899,9 @@ fn buildBuzzValueToZigValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: Zig
                 try self.buildValueToOptionalUserData(buzz_value, dest);
             }
         },
+        .Struct, .Union => {
+            try self.buildValueToForeignContainer(buzz_value, dest);
+        },
         else => unreachable,
     }
 }
@@ -904,15 +924,21 @@ fn buildZigValueToBuzzValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: Zig
                 }
 
                 // And to a buzz value
-                self.buildValueFromFloat(tmp_float, dest);
+                self.buildValueFromDouble(tmp_float, dest);
             } else {
                 self.buildValueFromInteger(zig_value, dest);
             }
         },
-        .Float => self.buildValueFromFloat(zig_value, dest),
+        .Float => {
+            if (zig_type.Float.bits == 64) {
+                self.buildValueFromDouble(zig_value, dest);
+            } else {
+                assert(zig_type.Float.bits == 32);
+                self.buildValueFromFloat(zig_value, dest);
+            }
+        },
         .Bool => self.buildValueFromBoolean(zig_value, dest),
         .Void => self.MOV(dest, m.MIR_new_uint_op(self.ctx, v.Value.Void.val)),
-        .Union, .Struct => unreachable, // FIXME: should call an api function build a ObjForeignContainer
         .Pointer => {
             // Is it a [*:0]const u8
             // zig fmt: off
@@ -940,6 +966,18 @@ fn buildZigValueToBuzzValue(self: *Self, buzz_type: *o.ObjTypeDef, zig_type: Zig
             } else {
                 try self.buildValueFromOptionalUserData(zig_value, dest);
             }
+        },
+        .Struct, .Union => {
+            // Load container value in alloca
+            const addr = self.REG("container", m.MIR_T_I64) catch unreachable;
+            self.ALLOCA(addr, zig_type.size());
+
+            // Copy it into new foreigncontainer
+            try self.buildValueFromForeignContainerPtrCopy(
+                buzz_type,
+                m.MIR_new_reg_op(self.ctx, addr),
+                dest,
+            );
         },
         else => unreachable,
     }
@@ -1028,7 +1066,36 @@ pub fn compileZdef(self: *Self, zdef: *const n.ZdefNode.ZdefElement) Error!*o.Ob
     return obj_native;
 }
 
-fn zigToMIRType(zig_type: ZigType) m.MIR_type_t {
+fn foreignContainerBlkType(self: *Self, zig_type: ZigType) c_uint {
+    _ = zig_type;
+    return switch (builtin.cpu.arch) {
+        .x86_64 => {
+            // See vendors/mir/c2mir/x86_64/cx86_64-ABI-code.c:349
+            // See https://github.com/vnmakarov/mir/issues/332#issuecomment-1549508740
+
+            // Traverse the type and count int and floats members (flatten any nested strucs)
+            // - MIR_BLK + 1 is used for passing unions/structures (of size <= 16) with integer members
+            // - MIR_BLK + 2 is used for passing unions/structures (of size <= 16) with fp members
+            // - MIR_BLK + 3 is used for passing structures whose 1st member is of int type and 2nd one is of fp type
+            // - MIR_BLK + 4 is used for passing structures whose 1st member is of fp type and 2nd one is of int type
+            // - MIR_BLK is for all other cases
+            unreachable;
+        },
+        .aarch64 => m.MIR_T_BLK, // See vendors/mir/c2mir/aarch64/caarch64-ABI-code.c:80
+        else => {
+            self.reporter.reportErrorFmt(
+                .unsupported_ffi_type,
+                self.state.?.function_node.node.location,
+                "Passing structs by value is not supported for architecture {s}",
+                .{@tagName(builtin.cpu.arch)},
+            );
+
+            unreachable;
+        },
+    };
+}
+
+fn zigToMIRType(self: *Self, zig_type: ZigType) m.MIR_type_t {
     return switch (zig_type) {
         .Int => if (zig_type.Int.signedness == .signed)
             switch (zig_type.Int.bits) {
@@ -1056,12 +1123,21 @@ fn zigToMIRType(zig_type: ZigType) m.MIR_type_t {
         .Optional,
         => m.MIR_T_I64,
         // See https://github.com/vnmakarov/mir/issues/332 passing struct by values will need some work
-        .Struct => unreachable, //m.MIR_T_BLK,
-        else => unreachable,
+        .Struct, .Union => self.foreignContainerBlkType(zig_type),
+        else => {
+            self.reporter.reportErrorFmt(
+                .unsupported_ffi_type,
+                self.state.?.function_node.node.location,
+                "Zig type {} is not supported",
+                .{zig_type},
+            );
+
+            unreachable;
+        },
     };
 }
 
-fn zigToMIRRegType(zig_type: ZigType) m.MIR_type_t {
+fn zigToMIRRegType(self: *Self, zig_type: ZigType) m.MIR_type_t {
     return switch (zig_type) {
         .Int, .Bool, .Pointer => m.MIR_T_I64,
         .Float => switch (zig_type.Float.bits) {
@@ -1069,12 +1145,17 @@ fn zigToMIRRegType(zig_type: ZigType) m.MIR_type_t {
             64 => m.MIR_T_D,
             else => unreachable,
         },
-        // See https://github.com/vnmakarov/mir/issues/332 passing struct by values will need some work
-        .Struct => unreachable, //m.MIR_T_BLK,
+        .Struct, .Union => m.MIR_T_I64,
         // Optional are only allowed on pointers
         .Optional => m.MIR_T_I64,
         else => {
-            std.debug.print("{}\n", .{zig_type});
+            self.reporter.reportErrorFmt(
+                .unsupported_ffi_type,
+                self.state.?.function_node.node.location,
+                "Zig type {} is not supported",
+                .{zig_type},
+            );
+
             unreachable;
         },
     };
@@ -1148,7 +1229,7 @@ fn buildZdefWrapper(self: *Self, zdef_element: *const n.ZdefNode.ZdefElement) Er
     for (zig_function_def.Fn.params) |param| {
         try arg_types.append(
             .{
-                .type = zigToMIRType(
+                .type = self.zigToMIRType(
                     if (param.type) |param_type|
                         param_type.*
                     else
@@ -1168,7 +1249,7 @@ fn buildZdefWrapper(self: *Self, zdef_element: *const n.ZdefNode.ZdefElement) Er
     const buzz_return_type = function_def.return_type;
 
     var return_mir_type = if (zig_return_type != .Void)
-        zigToMIRRegType(zig_return_type)
+        self.zigToMIRRegType(zig_return_type)
     else
         null;
 
@@ -1229,7 +1310,7 @@ fn buildZdefWrapper(self: *Self, zdef_element: *const n.ZdefNode.ZdefElement) Er
         );
         const param = m.MIR_new_reg_op(
             self.ctx,
-            try self.REG("param", zigToMIRRegType(zig_function_def.Fn.params[zidx].type.?.*)),
+            try self.REG("param", self.zigToMIRRegType(zig_function_def.Fn.params[zidx].type.?.*)),
         );
 
         try self.buildPeek(@intCast(idx - 1), param_value);
@@ -1932,6 +2013,19 @@ fn buildValueFromForeignContainerPtr(self: *Self, type_def: *o.ObjTypeDef, value
     );
 }
 
+fn buildValueFromForeignContainerPtrCopy(self: *Self, type_def: *o.ObjTypeDef, value: m.MIR_op_t, dest: m.MIR_op_t) !void {
+    try self.buildExternApiCall(
+        .bz_containerFromSliceCopy,
+        dest,
+        &[_]m.MIR_op_t{
+            m.MIR_new_reg_op(self.ctx, self.state.?.vm_reg.?),
+            m.MIR_new_uint_op(self.ctx, @intFromPtr(type_def)),
+            value,
+            m.MIR_new_uint_op(self.ctx, type_def.resolved_type.?.ForeignContainer.zig_type.size()),
+        },
+    );
+}
+
 fn buildValueFromOptionalForeignContainerPtr(self: *Self, type_def: *o.ObjTypeDef, value: m.MIR_op_t, dest: m.MIR_op_t) !void {
     const null_label = m.MIR_new_label(self.ctx);
 
@@ -2043,6 +2137,38 @@ fn buildValueFromFloat(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     self.ALLOCA(addr, @sizeOf(u64));
 
     // Put the value in it as double
+    self.FMOV(
+        m.MIR_new_mem_op(
+            self.ctx,
+            m.MIR_T_F,
+            0,
+            addr,
+            0,
+            0,
+        ),
+        value,
+    );
+
+    // Take it out as u64
+    self.MOV(
+        dest,
+        m.MIR_new_mem_op(
+            self.ctx,
+            m.MIR_T_U64,
+            0,
+            addr,
+            0,
+            0,
+        ),
+    );
+}
+
+fn buildValueFromDouble(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
+    // Allocate memory
+    const addr = self.REG("cast", m.MIR_T_I64) catch unreachable;
+    self.ALLOCA(addr, @sizeOf(u64));
+
+    // Put the value in it as double
     self.DMOV(
         m.MIR_new_mem_op(
             self.ctx,
@@ -2069,7 +2195,7 @@ fn buildValueFromFloat(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     );
 }
 
-fn buildValueToFloat(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
+fn buildValueToDouble(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     // Allocate memory
     const addr = self.REG("cast", m.MIR_T_I64) catch unreachable;
     self.ALLOCA(addr, @sizeOf(u64));
@@ -2101,6 +2227,38 @@ fn buildValueToFloat(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
     );
 }
 
+fn buildValueToFloat(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) void {
+    // Allocate memory
+    const addr = self.REG("cast", m.MIR_T_I64) catch unreachable;
+    self.ALLOCA(addr, @sizeOf(u64));
+
+    // Put the value in it as u64
+    self.MOV(
+        m.MIR_new_mem_op(
+            self.ctx,
+            m.MIR_T_U64,
+            0,
+            addr,
+            0,
+            0,
+        ),
+        value,
+    );
+
+    // Take it out as float
+    self.FMOV(
+        dest,
+        m.MIR_new_mem_op(
+            self.ctx,
+            m.MIR_T_F,
+            0,
+            addr,
+            0,
+            0,
+        ),
+    );
+}
+
 fn buildValueToForeignContainer(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t) !void {
     const index = try self.REG("index", m.MIR_T_I64);
     self.MOV(
@@ -2108,7 +2266,7 @@ fn buildValueToForeignContainer(self: *Self, value: m.MIR_op_t, dest: m.MIR_op_t
         m.MIR_new_uint_op(self.ctx, 0),
     );
 
-    const foreign = try self.REG("foreign", m.MIR_T_P);
+    const foreign = try self.REG("foreign", m.MIR_T_I64);
     try self.buildExternApiCall(
         .bz_valueToForeignContainerPtr,
         m.MIR_new_reg_op(self.ctx, foreign),
@@ -2133,7 +2291,7 @@ fn unwrap(self: *Self, def_type: o.ObjTypeDef.Type, value: m.MIR_op_t, dest: m.M
     return switch (def_type) {
         .Bool => self.buildValueToBoolean(value, dest),
         .Integer => self.buildValueToInteger(value, dest),
-        .Float => self.buildValueToFloat(value, dest),
+        .Float => self.buildValueToDouble(value, dest),
         .Void => self.MOV(dest, value),
         .String,
         .Pattern,
@@ -2163,7 +2321,7 @@ fn wrap(self: *Self, def_type: o.ObjTypeDef.Type, value: m.MIR_op_t, dest: m.MIR
     return switch (def_type) {
         .Bool => self.buildValueFromBoolean(value, dest),
         .Integer => self.buildValueFromInteger(value, dest),
-        .Float => self.buildValueFromFloat(value, dest),
+        .Float => self.buildValueFromDouble(value, dest),
         .Void => self.MOV(dest, m.MIR_new_uint_op(self.ctx, v.Value.Void.val)),
         .String,
         .Pattern,
@@ -5246,6 +5404,20 @@ inline fn DMOV(self: *Self, dest: m.MIR_op_t, value: m.MIR_op_t) void {
     );
 }
 
+inline fn FMOV(self: *Self, dest: m.MIR_op_t, value: m.MIR_op_t) void {
+    self.append(
+        m.MIR_new_insn_arr(
+            self.ctx,
+            m.MIR_FMOV,
+            2,
+            &[_]m.MIR_op_t{
+                dest,
+                value,
+            },
+        ),
+    );
+}
+
 inline fn EQ(self: *Self, dest: m.MIR_op_t, left: m.MIR_op_t, right: m.MIR_op_t) void {
     self.append(
         m.MIR_new_insn_arr(
@@ -5974,6 +6146,7 @@ pub const ExternApi = enum {
     bz_containerInstance,
     bz_valueTypeOf,
     bz_containerFromSlice,
+    bz_containerFromSliceCopy,
 
     bz_dumpStack,
 
@@ -6785,7 +6958,7 @@ pub const ExternApi = enum {
                     },
                 },
             ),
-            .bz_containerFromSlice => m.MIR_new_proto_arr(
+            .bz_containerFromSlice, .bz_containerFromSliceCopy => m.MIR_new_proto_arr(
                 ctx,
                 self.pname(),
                 1,
@@ -6901,6 +7074,7 @@ pub const ExternApi = enum {
             .bz_containerInstance => @as(*anyopaque, @ptrFromInt(@intFromPtr(&api.ObjForeignContainer.bz_containerInstance))),
             .bz_valueTypeOf => @as(*anyopaque, @ptrFromInt(@intFromPtr(&api.Value.bz_valueTypeOf))),
             .bz_containerFromSlice => @as(*anyopaque, @ptrFromInt(@intFromPtr(&api.ObjForeignContainer.bz_containerFromSlice))),
+            .bz_containerFromSliceCopy => @as(*anyopaque, @ptrFromInt(@intFromPtr(&api.ObjForeignContainer.bz_containerFromSliceCopy))),
             .memcpy => @as(*anyopaque, @ptrFromInt(@intFromPtr(&api.bz_memcpy))),
             .setjmp => @as(
                 *anyopaque,
@@ -6976,6 +7150,7 @@ pub const ExternApi = enum {
             .bz_containerInstance => "bz_containerInstance",
             .bz_valueTypeOf => "bz_valueTypeOf",
             .bz_containerFromSlice => "bz_containerFromSlice",
+            .bz_containerFromSliceCopy => "bz_containerFromSliceCopy",
             .memcpy => "bz_memcpy",
 
             .setjmp => if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.tag == .windows) "_setjmp" else "setjmp",
@@ -7045,6 +7220,7 @@ pub const ExternApi = enum {
             .bz_containerInstance => "p_bz_containerInstance",
             .bz_valueTypeOf => "p_bz_valueTypeOf",
             .bz_containerFromSlice => "p_bz_containerFromSlice",
+            .bz_containerFromSliceCopy => "p_bz_containerFromSliceCopy",
             .memcpy => "p_bz_memcpy",
 
             .setjmp => if (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.windows) "p__setjmp" else "p_setjmp",

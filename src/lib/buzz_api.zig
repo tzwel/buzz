@@ -367,6 +367,7 @@ pub const ObjForeignContainer = opaque {
     pub extern fn bz_containerInstance(vm: *VM, typedef_value: Value) Value;
     pub extern fn bz_containerSlice(container_value: Value, len: *usize) [*]u8;
     pub extern fn bz_containerFromSlice(vm: *VM, type_def: *ObjTypeDef, ptr: [*]u8, len: usize) Value;
+    pub extern fn bz_containerFromSliceCopy(vm: *VM, type_def: *ObjTypeDef, ptr: [*]u8, len: usize) Value;
 };
 
 pub extern fn dumpInt(value: u64) void;

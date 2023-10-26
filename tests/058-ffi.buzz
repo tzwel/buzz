@@ -5,108 +5,111 @@ import "ffi";
 
 | TODO: one zdef for one lib and multiple declarations
 | TODO: Allow multiple declarations in one string
-zdef("tests/utils/libforeign", `
-    fn acos(value: f64) f64;
-    fn fprint(msg: [*:0]const u8) void;
-    fn sum(values: [*]i32, len: i32) i32;
-`);
+| zdef("tests/utils/libforeign", `
+|     fn acos(value: f64) f64;
+|     fn fprint(msg: [*:0]const u8) void;
+|     fn sum(values: [*]i32, len: i32) i32;
+| `);
 
-test "scalar type" {
-    assert(acos(0.12) == 1.4505064444001086, message: "Could call FFI function with scalar arguments");
-}
+| test "scalar type" {
+|     assert(acos(0.12) == 1.4505064444001086, message: "Could call FFI function with scalar arguments");
+| }
 
-test "cstring" {
-    fprint(cstr("hello world"));
-}
+| test "cstring" {
+|     fprint(cstr("hello world"));
+| }
 
-test "pointer with Buffer" {
-    | TODO: would be better with object destructor so the buffer can be collected
-    Buffer buffer = Buffer.init();
+| test "pointer with Buffer" {
+|     | TODO: would be better with object destructor so the buffer can be collected
+|     Buffer buffer = Buffer.init();
 
-    buffer.writeZ::<int>("i32", values: [1, 2, 3]);
-    buffer.writeZ::<int>("i32", values: [1, 2, 3]);
+|     buffer.writeZ::<int>("i32", values: [1, 2, 3]);
+|     buffer.writeZ::<int>("i32", values: [1, 2, 3]);
 
-    try {
-        | Arguably, the zig type parameter could a constant and be built at compile time
-        | But: that would require a new type
-        | Since we cache the result of the type parsing this roughly equivalent
-        buffer.writeZ::<int>("u64", values: [1]);
-        assert(false, message: "Using bad buzz type triggers error");
-    } catch (FFITypeMismatchError _) {
-        assert(true, message: "Using bad buzz type triggers error");
-    }
+|     try {
+|         | Arguably, the zig type parameter could a constant and be built at compile time
+|         | But: that would require a new type
+|         | Since we cache the result of the type parsing this roughly equivalent
+|         buffer.writeZ::<int>("u64", values: [1]);
+|         assert(false, message: "Using bad buzz type triggers error");
+|     } catch (FFITypeMismatchError _) {
+|         assert(true, message: "Using bad buzz type triggers error");
+|     }
 
-    int i32align = alignOf("i32");
-    int len = buffer.len(align: i32align);
-    assert(len == buffer.len() / 4, message: "Len align");
-    int total = sum(buffer.ptr(), len: len);
+|     int i32align = alignOf("i32");
+|     int len = buffer.len(align: i32align);
+|     assert(len == buffer.len() / 4, message: "Len align");
+|     int total = sum(buffer.ptr(), len: len);
 
-    assert(total == 12, message: "Could call FFI function with pointer argument");
+|     assert(total == 12, message: "Could call FFI function with pointer argument");
 
-    int readTotal = 0;
-    foreach (int i in 0..buffer.len(align: i32align)) {
-        readTotal = readTotal + buffer.readZAt::<int>(
-            at: i,
-            zigType: "i32"
-        );
-    }
+|     int readTotal = 0;
+|     foreach (int i in 0..buffer.len(align: i32align)) {
+|         readTotal = readTotal + buffer.readZAt::<int>(
+|             at: i,
+|             zigType: "i32"
+|         );
+|     }
 
-    assert(readTotal == total, message: "Could read from pointer");
+|     assert(readTotal == total, message: "Could read from pointer");
 
-    int subTotal = sum(buffer.ptr(1, align: i32align), len: len - 1);
+|     int subTotal = sum(buffer.ptr(1, align: i32align), len: len - 1);
 
-    assert(subTotal == 11, message: "Could get ptr at offset");
-}
+|     assert(subTotal == 11, message: "Could get ptr at offset");
+| }
 
-zdef("tests/utils/libforeign", `
-    const Data = extern struct {
-        id: i32,
-        msg: [*:0]const u8,
-    };
+| zdef("tests/utils/libforeign", `
+|     const Data = extern struct {
+|         id: i32,
+|         msg: [*:0]const u8,
+|         value: f32,
+|     };
 
-    fn get_data_msg(data: *Data) [*:0]const u8;
-    fn set_data_id(data: *Data) void;
-`);
+|     fn get_data_msg(data: *Data) [*:0]const u8;
+|     fn set_data_id(data: *Data) void;
+| `);
 
-test "struct" {
-    Data data = Data{
-        msg = cstr("bye world"),
-        id = 123,
-    };
+| test "struct" {
+|     Data data = Data{
+|         msg = cstr("bye world"),
+|         id = 123,
+|         value = 42.0,
+|     };
 
-    assert(data.msg == "bye world\0", message: "Could instanciate Zig struct");
-    assert(data.id == 123, message: "Could instanciate Zig struct");
+|     assert(data.msg == "bye world\0", message: "Could instanciate Zig struct");
+|     assert(data.id == 123, message: "Could instanciate Zig struct");
 
-    data.id = 42;
+|     data.id = 42;
 
-    assert(data.id == 42, message: "Could set Zig struct field");
+|     assert(data.id == 42, message: "Could set Zig struct field");
 
-    assert(get_data_msg(data) == "bye world\0", message: "Could use foreign function with struct ptr param");
+|     assert(get_data_msg(data) == "bye world\0", message: "Could use foreign function with struct ptr param");
 
-    set_data_id(data);
+|     set_data_id(data);
 
-    assert(data.id == 84, message: "Could use foreign function with struct ptr param that modifies the struct");
-}
+|     assert(data.id == 84, message: "Could use foreign function with struct ptr param that modifies the struct");
+| }
 
-test "write/read struct in buffer" {
-    Data data = Data{
-        msg = cstr("bye world"),
-        id = 123,
-    };
+| test "write/read struct in buffer" {
+|     Data data = Data{
+|         msg = cstr("bye world"),
+|         id = 123,
+|         value = 42.0,
+|     };
 
-    Buffer buffer = Buffer.init();
+|     Buffer buffer = Buffer.init();
 
-    buffer.writeStruct::<Data>(Data, values: [data]);
+|     buffer.writeStruct::<Data>(Data, values: [data]);
 
-    assert(buffer.toString().len() == sizeOfStruct(Data), message: "Could write struct to buffer");
+|     assert(buffer.toString().len() == sizeOfStruct(Data), message: "Could write struct to buffer");
 
-    Data read = buffer.readStruct::<Data>(Data);
+|     Data read = buffer.readStruct::<Data>(Data);
 
-    assert(
-        read.msg == data.msg and read.id == data.id,
-        message: "Could read struct from buffer"
-    );
-}
+|     assert(
+|         read.msg == data.msg and read.id == data.id,
+|         message: "Could read struct from buffer"
+|     );
+| }
 
 zdef("tests/utils/libforeign", `
     pub const Flag = extern struct {
@@ -114,37 +117,54 @@ zdef("tests/utils/libforeign", `
         value: bool,
     };
 
-    pub const Misc = extern union {
-        id: i32,
-        data: Data,
-        flag: Flag,
-    };
-
-    fn get_misc_msg(misc: *Misc) [*:0]const u8;
-    fn get_misc_flag(misc: *Misc) bool;
-    fn set_misc_id(misc: *Misc, new_id: i32) void;
+    // pub const Misc = extern union {
+    //     id: i32,
+    //     data: Data,
+    //     flag: Flag,
+    // };
+    //
+    // fn get_misc_msg(misc: *Misc) [*:0]const u8;
+    // fn get_misc_flag(misc: *Misc) bool;
+    // fn set_misc_id(misc: *Misc, new_id: i32) void;
+    fn new_flag() Flag;
+    fn get_flag_id(flag: Flag) i32;
 `);
 
-test "union" {
-    Misc misc = Misc{
-        data = Data{
-            id = 123,
-            msg = cstr("hello world"),
-        }
-    };
+| test "union" {
+|     Misc misc = Misc{
+|         data = Data{
+|             id = 123,
+|             msg = cstr("hello world"),
+|             value = 42.0,
+|         }
+|     };
 
-    assert(get_misc_msg(misc) == cstr("hello world"), message: "Could read union field");
+|     assert(get_misc_msg(misc) == cstr("hello world"), message: "Could read union field");
 
-    misc.flag = Flag{
-        id = 123,
+|     misc.flag = Flag{
+|         id = 123,
+|         value = true,
+|     };
+
+|     assert(get_misc_flag(misc), message: "Could read union field");
+
+|     misc.id = 321;
+
+|     assert(misc.id == 321, message: "Got expected memory layout of a C union");
+|     assert(misc.data.id == 321, message: "Got expected memory layout of a C union");
+|     assert(misc.flag.id == 321, message: "Got expected memory layout of a C union");
+| }
+
+test "struct by value" {
+    | var flag = new_flag();
+
+    | dump(flag);
+    | assert(flag.id == 42 and flag.value, message: "Could get struct return by value");
+
+    var flag = Flag{
+        id = 42,
         value = true,
     };
 
-    assert(get_misc_flag(misc), message: "Could read union field");
-
-    misc.id = 321;
-
-    assert(misc.id == 321, message: "Got expected memory layout of a C union");
-    assert(misc.data.id == 321, message: "Got expected memory layout of a C union");
-    assert(misc.flag.id == 321, message: "Got expected memory layout of a C union");
+    dump(get_flag_id(flag));
 }

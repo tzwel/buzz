@@ -52,3 +52,14 @@ export fn get_misc_flag(misc: *Misc) bool {
 export fn set_misc_id(misc: *Misc, new_id: i32) void {
     misc.id = new_id;
 }
+
+export fn new_flag() Flag {
+    return .{
+        .id = 42,
+        .value = true,
+    };
+}
+
+export fn get_flag_id(flag: Flag) i32 {
+    return flag.id;
+}
